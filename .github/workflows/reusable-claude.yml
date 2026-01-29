@@ -1,0 +1,119 @@
+# Reusable Claude Code Workflow
+# 他のリポジトリから呼び出し可能な再利用可能ワークフロー
+#
+# Usage (in your repository's .github/workflows/claude.yml):
+#   name: Claude Code
+#   on:
+#     issue_comment:
+#       types: [created]
+#     pull_request_review_comment:
+#       types: [created]
+#
+#   jobs:
+#     claude:
+#       uses: Javakky/claude-starter/.github/workflows/reusable-claude.yml@master
+#       secrets:
+#         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#       with:
+#         allowed_tools: |
+#           Bash(npm run lint:*)
+#           Bash(npm run test:*)
+#           Bash(npm run build:*)
+
+name: Reusable Claude Code
+
+on:
+  workflow_call:
+    inputs:
+      default_model:
+        description: 'デフォルトの Claude モデル (sonnet/opus/haiku)'
+        type: string
+        default: 'sonnet'
+      default_max_turns:
+        description: 'デフォルトの最大ターン数'
+        type: number
+        default: 10
+      allowed_tools:
+        description: '許可する追加ツール（改行区切り）'
+        type: string
+        default: ''
+      timeout_minutes:
+        description: 'ジョブのタイムアウト（分）'
+        type: number
+        default: 30
+      checkout_fetch_depth:
+        description: 'git checkout の fetch-depth'
+        type: number
+        default: 0
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Claude Code OAuth Token'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: claude-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@claude')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.checkout_fetch_depth }}
+
+      - name: Resolve Claude options
+        id: opts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment?.body ?? "";
+
+            // モデル解析
+            const model =
+              body.includes("[sonnet]")  ? "sonnet" :
+              body.includes("[opus]")  ? "opus" :
+              body.includes("[haiku]") ? "haiku" : "${{ inputs.default_model }}";
+
+            // ターン数解析
+            const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
+            const maxTurns = m ? Number(m[1]) : ${{ inputs.default_max_turns }};
+
+            core.setOutput("model", model);
+            core.setOutput("max_turns", String(maxTurns));
+
+      - name: Build allowed tools
+        id: tools
+        run: |
+          TOOLS=""
+          CUSTOM_TOOLS="${{ inputs.allowed_tools }}"
+
+          if [ -n "$CUSTOM_TOOLS" ]; then
+            # 改行をスペースに変換し、各ツールを --allowedTools で追加
+            while IFS= read -r tool; do
+              if [ -n "$tool" ]; then
+                TOOLS="$TOOLS --allowedTools \"$tool\""
+              fi
+            done <<< "$CUSTOM_TOOLS"
+          fi
+
+          echo "tools=$TOOLS" >> $GITHUB_OUTPUT
+
+      - name: Run Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --model ${{ steps.opts.outputs.model }}
+            --max-turns ${{ steps.opts.outputs.max_turns }}
+            ${{ steps.tools.outputs.tools }}
