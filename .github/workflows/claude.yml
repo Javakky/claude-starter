@@ -1,0 +1,61 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [ created ]
+  pull_request_review_comment:
+    types: [ created ]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: claude-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@claude')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 理想としてはプロジェクトにあった言語実行環境が追加されているべき
+
+      - name: Resolve Claude options
+        id: opts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment?.body ?? "";
+            const model =
+              body.includes("[sonnet]")  ? "sonnet" :
+              body.includes("[opus]")  ? "opus" :
+              body.includes("[haiku]") ? "haiku" : "sonnet";
+            
+            const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
+            const maxTurns = m ? Number(m[1]) : 10;
+            
+            core.setOutput("model", model);
+            core.setOutput("max_turns", String(maxTurns));
+
+      - name: Run Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --model ${{ steps.opts.outputs.model }}
+            --max-turns ${{ steps.opts.outputs.max_turns }}
+            --allowedTools "Bash(vendor/bin/php-cs-fixer fix:*)" "Bash(vendor/bin/phpstan analyse:*)" "Bash(vendor/bin/phpunit tests:*)"
+            --allowedTools "Bash(sbt scalafixAll)"
+            --allowedTools "Bash(sbt scalafmtAll)"
+            --allowedTools "Bash(sbt scalafmtSbt)"
+            --allowedTools "Bash(sbt test)"
