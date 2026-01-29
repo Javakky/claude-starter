@@ -107,8 +107,19 @@ parse_args() {
 }
 
 # === ユーティリティ関数 ===
+
+# バージョン形式の検証
+validate_version() {
+    local version="$1"
+    if [[ -n "$version" && ! "$version" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
+        warn "Version '$version' does not match expected format (e.g., v1.0.0)"
+        warn "Proceeding anyway - this may be a branch name or commit SHA"
+    fi
+}
+
 get_ref() {
     if [[ -n "$VERSION" ]]; then
+        validate_version "$VERSION"
         echo "$VERSION"
     else
         echo "$DEFAULT_BRANCH"

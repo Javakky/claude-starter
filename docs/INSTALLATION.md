@@ -16,6 +16,15 @@
 
 最も簡単な方法です。言語・フレームワークを問わず利用できます。
 
+> ⚠️ **セキュリティに関する注意**: `curl | bash` パターンを実行する前に、必ずスクリプトの内容を確認してください。信頼できるソース（公式 GitHub リポジトリの raw content URL）からのみダウンロードしてください。不安な場合は、まずスクリプトをダウンロードして内容を確認してから実行することを推奨します。
+>
+> ```bash
+> # スクリプトの内容を確認してから実行する方法
+> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh -o install.sh
+> cat install.sh  # 内容を確認
+> chmod +x install.sh && ./install.sh
+> ```
+
 ### 基本インストール
 
 ```bash
