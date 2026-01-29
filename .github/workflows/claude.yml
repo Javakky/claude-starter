@@ -21,7 +21,7 @@ jobs:
   claude:
     timeout-minutes: 30
     runs-on: ubuntu-latest
-    if: contains(github.event.comment.body, '@claude')
+    if: contains(github.event.comment.body, '@claude') && !contains(github.event.comment.body, '[review]')
 
     steps:
       - name: Checkout repository
