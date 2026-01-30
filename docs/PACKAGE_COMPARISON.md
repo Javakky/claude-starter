@@ -67,7 +67,7 @@ vendor/bin/claude-starter init
 ```yaml
 jobs:
   claude:
-    uses: Javakky/claude-starter/.github/workflows/reusable-claude.yml@master
+    uses: Javakky/claude-starter/.github/workflows/reusable-claude.yml@main
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -113,7 +113,7 @@ ln -s .claude-starter/.claude .claude
 ### 5. シェルスクリプト（curl）✅（メイン採用）
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash
 ```
 
 **メリット**
