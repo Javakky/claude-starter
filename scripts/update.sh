@@ -116,6 +116,14 @@ parse_args() {
 
 # === ユーティリティ関数 ===
 
+# 真偽値の判定ヘルパー（true/1/yes/y/on を true として扱う）
+is_true() {
+    case "${1,,}" in
+        true|1|yes|y|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # バージョン形式の検証
 validate_version() {
     local version="$1"
@@ -142,13 +150,16 @@ get_raw_url() {
 }
 
 # ref（タグ/ブランチ）が存在するか事前検証
+# GET で必須ファイルを取得し、存在しなければエラー（HEAD より確実）
 validate_ref() {
     local ref
     ref=$(get_ref)
-    local test_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${ref}/README.md"
+    local test_url
+    # README.md ではなく、このスクリプトが必要とするファイルで検証
+    test_url="$(get_raw_url "scripts/sync_templates.py")"
 
     info "Validating reference '${ref}'..."
-    if ! curl -fsSL --head "$test_url" >/dev/null 2>&1; then
+    if ! curl -fsSL "$test_url" -o /dev/null 2>&1; then
         error "Reference '${ref}' does not exist or is not accessible"
         error "Please check if the version/branch name is correct"
         exit 1
@@ -157,13 +168,13 @@ validate_ref() {
 
 # TARGET_DIR の検証
 validate_target_dir() {
-    # 絶対パスに変換
-    if [[ "$TARGET_DIR" != /* ]]; then
-        TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd)" || {
-            error "Target directory '$TARGET_DIR' does not exist"
-            exit 1
-        }
-    fi
+    local abs
+    # cd && pwd で正規化（相対パス、.、.. すべて対応）
+    abs="$(cd "$TARGET_DIR" 2>/dev/null && pwd)" || {
+        error "Target directory '$TARGET_DIR' does not exist"
+        exit 1
+    }
+    TARGET_DIR="$abs"
 
     # ディレクトリであることを確認
     if [[ ! -d "$TARGET_DIR" ]]; then
@@ -180,9 +191,9 @@ validate_target_dir() {
 
 backup_file() {
     local file="$1"
-    if [[ -f "$file" && "$BACKUP" == "true" ]]; then
+    if [[ -f "$file" ]] && is_true "$BACKUP"; then
         local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
-        if [[ "$DRY_RUN" == "true" ]]; then
+        if is_true "$DRY_RUN"; then
             info "[DRY-RUN] Would backup: $file -> $backup"
         else
             cp "$file" "$backup"
@@ -197,10 +208,20 @@ download_file() {
     local dest_dir
     dest_dir=$(dirname "$dest")
 
-    if [[ "$DRY_RUN" == "true" ]]; then
+    if is_true "$DRY_RUN"; then
         info "[DRY-RUN] Would download: $url -> $dest"
         return 0
     fi
+
+    # 親ディレクトリがファイルとして存在する場合はエラー
+    local parent="$dest_dir"
+    while [[ "$parent" != "/" && "$parent" != "." ]]; do
+        if [[ -f "$parent" ]]; then
+            error "Cannot create directory '$dest_dir': '$parent' is a file"
+            return 1
+        fi
+        parent=$(dirname "$parent")
+    done
 
     # ディレクトリ作成
     mkdir -p "$dest_dir"
@@ -338,7 +359,7 @@ main() {
     printf "\n"
     success "Update complete!"
 
-    if [[ "$BACKUP" == "true" ]]; then
+    if is_true "$BACKUP"; then
         printf "\n"
         info "Backups were created with .backup.YYYYMMDD_HHMMSS suffix"
         info "Review changes and delete backups when satisfied:"
