@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Claude Starter - Install Script
-# Usage: curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash
-#        curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --version v1.0.0
-#        curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --no-workflows
+# Usage: curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
+#        curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --version v1.0.0
+#        curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --no-workflows
 set -euo pipefail
 
 # === 設定 ===
 REPO_OWNER="${REPO_OWNER:-Javakky}"
 REPO_NAME="${REPO_NAME:-claude-starter}"
-DEFAULT_BRANCH="main"
+DEFAULT_BRANCH="master"
 VERSION="${VERSION:-}"
 NO_WORKFLOWS="${NO_WORKFLOWS:-false}"
 NO_CLAUDE="${NO_CLAUDE:-false}"

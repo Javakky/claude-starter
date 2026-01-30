@@ -8,7 +8,7 @@ set -euo pipefail
 # === 設定 ===
 REPO_OWNER="${REPO_OWNER:-Javakky}"
 REPO_NAME="${REPO_NAME:-claude-starter}"
-DEFAULT_BRANCH="main"
+DEFAULT_BRANCH="master"
 VERSION="${VERSION:-}"
 BACKUP="${BACKUP:-true}"
 DRY_RUN="${DRY_RUN:-false}"

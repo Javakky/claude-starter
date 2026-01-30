@@ -19,13 +19,13 @@ Claude Starter は以下を提供します：
 最も簡単な方法です。言語・フレームワークを問わず利用できます。
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
 ```
 
 > ⚠️ **セキュリティに関する注意**: スクリプトの内容を確認してから実行することをお勧めします。
 >
 > ```bash
-> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh -o install.sh
+> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh -o install.sh
 > cat install.sh  # 内容を確認
 > chmod +x install.sh && ./install.sh
 > ```
@@ -34,19 +34,19 @@ curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/i
 
 ```bash
 # バージョン指定
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --version v1.0.0
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --version v1.0.0
 
 # Workflows のみ（.claude/ をスキップ）
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --no-claude
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --no-claude
 
 # .claude/ のみ（Workflows をスキップ）
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --no-workflows
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --no-workflows
 
 # 強制上書き
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --force
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --force
 
 # 確認のみ（dry-run）
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh | bash -s -- --dry-run
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- --dry-run
 ```
 
 ### 更新方法
@@ -151,7 +151,7 @@ on:
 
 jobs:
   claude:
-    uses: Javakky/claude-starter/.github/workflows/reusable-claude.yml@main
+    uses: Javakky/claude-starter/.github/workflows/reusable-claude.yml@master
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     with:
@@ -179,7 +179,7 @@ on:
 
 jobs:
   review:
-    uses: Javakky/claude-starter/.github/workflows/reusable-claude-review.yml@main
+    uses: Javakky/claude-starter/.github/workflows/reusable-claude-review.yml@master
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     with:
@@ -195,7 +195,7 @@ jobs:
 
 ```bash
 # スクリプトを直接ダウンロードして実行
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/main/scripts/install.sh -o install.sh
+curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh -o install.sh
 chmod +x install.sh
 ./install.sh
 ```
