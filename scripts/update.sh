@@ -118,7 +118,7 @@ parse_args() {
 
 # 真偽値の判定ヘルパー（true/1/yes/y/on を true として扱う）
 is_true() {
-    case "${1,,}" in
+    case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
         true|1|yes|y|on) return 0 ;;
         *) return 1 ;;
     esac
