@@ -142,6 +142,16 @@ get_ref() {
     fi
 }
 
+get_ref_for_workflow() {
+    local ref
+    ref=$(get_ref)
+    if [[ "$ref" == "master" ]]; then
+        echo "@master"
+    else
+        echo "@$ref"
+    fi
+}
+
 get_raw_url() {
     local path="$1"
     local ref
@@ -205,37 +215,49 @@ backup_file() {
 download_file() {
     local url="$1"
     local dest="$2"
-    local dest_dir
-    dest_dir=$(dirname "$dest")
 
     if is_true "$DRY_RUN"; then
         info "[DRY-RUN] Would download: $url -> $dest"
         return 0
     fi
 
-    # 親ディレクトリがファイルとして存在する場合はエラー
-    local parent="$dest_dir"
-    while [[ "$parent" != "/" && "$parent" != "." ]]; do
-        if [[ -f "$parent" ]]; then
-            error "Cannot create directory '$dest_dir': '$parent' is a file"
-            return 1
-        fi
-        parent=$(dirname "$parent")
-    done
-
-    # ディレクトリ作成
-    mkdir -p "$dest_dir"
-
-    # バックアップ
+    mkdir -p "$(dirname "$dest")"
     backup_file "$dest"
 
-    # ダウンロード（エラー出力を表示）
     if curl -fsSL "$url" -o "$dest"; then
         success "Updated: $dest"
     else
         error "Failed to download: $url"
         return 1
     fi
+}
+
+download_and_replace() {
+    local url="$1"
+    local dest="$2"
+    local placeholder="$3"
+    local replacement="$4"
+
+    if is_true "$DRY_RUN"; then
+        info "[DRY-RUN] Would update from template: $url -> $dest"
+        return 0
+    fi
+
+    local temp_file
+    temp_file=$(mktemp)
+    if ! curl -fsSL "$url" -o "$temp_file"; then
+        error "Failed to download template: $url"
+        rm "$temp_file"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$dest")"
+    backup_file "$dest"
+
+    sed "s/${placeholder}/${replacement}/g" "$temp_file" > "$dest"
+    rm "$temp_file"
+
+    success "Updated from template: $dest"
 }
 
 # === ファイル一覧（1箇所で管理） ===
@@ -257,52 +279,15 @@ declare -a CUSTOMIZABLE_FILES=(
     ".claude/rules/20_quality.md"
     ".claude/rules/30_security.md"
     ".claude/rules/40_output.md"
-    ".github/workflows/claude.yml"
-    ".github/workflows/claude_review.yml"
     ".github/pull_request_template.md"
     ".github/ISSUE_TEMPLATE/agent_task.md"
     "docs/agent/TASK.md"
     "docs/agent/PR.md"
 )
 
-# === カスタマイズ検出 ===
-# ユーザーがカスタマイズした可能性のあるファイルを検出
-detect_customizations() {
-    info "Checking for customizations..."
-
-    local customized_files=()
-
-    # .claude/rules/ はカスタマイズされている可能性が高い
-    if [[ -d "${TARGET_DIR}/.claude/rules" ]]; then
-        for file in "${TARGET_DIR}"/.claude/rules/*.md; do
-            if [[ -f "$file" ]]; then
-                # ファイルの内容を確認してデフォルトと異なるか判定
-                # ここでは単純に存在確認のみ
-                customized_files+=("$file")
-            fi
-        done
-    fi
-
-    # .github/workflows/claude.yml も言語固有の設定がある
-    if [[ -f "${TARGET_DIR}/.github/workflows/claude.yml" ]]; then
-        customized_files+=("${TARGET_DIR}/.github/workflows/claude.yml")
-    fi
-
-    if [[ ${#customized_files[@]} -gt 0 ]]; then
-        warn "The following files may contain customizations:"
-        for file in "${customized_files[@]}"; do
-            printf "  - %s\n" "$file"
-        done
-        printf "\n"
-        warn "These files will be backed up before updating."
-    fi
-}
-
 # === メイン処理 ===
 update_safe_files() {
-    # カスタマイズされにくいファイル（常に最新を取得しても問題ないもの）
     info "Updating safe files..."
-
     for file in "${SAFE_FILES[@]}"; do
         local dest="${TARGET_DIR}/${file}"
         if [[ -f "$dest" ]]; then
@@ -314,15 +299,38 @@ update_safe_files() {
 }
 
 update_customizable_files() {
-    # カスタマイズされている可能性のあるファイル
-    info "Updating customizable files (with backup)..."
-
+    warn "Updating customizable files. Your customizations will be backed up."
     for file in "${CUSTOMIZABLE_FILES[@]}"; do
         local dest="${TARGET_DIR}/${file}"
         if [[ -f "$dest" ]]; then
             download_file "$(get_raw_url "$file")" "$dest"
         else
             info "Skipping (not installed): $file"
+        fi
+    done
+}
+
+update_reusable_workflows() {
+    info "Updating reusable workflow files from templates..."
+    local ref_for_workflow
+    ref_for_workflow=$(get_ref_for_workflow)
+
+    local templates=(
+        "examples/.github/workflows/claude.yml.template"
+        "examples/.github/workflows/claude_review.yml.template"
+    )
+
+    for template in "${templates[@]}"; do
+        local dest_filename
+        dest_filename=$(basename "${template%.template}")
+        local dest="${TARGET_DIR}/.github/workflows/${dest_filename}"
+
+        if [[ -f "$dest" ]]; then
+            local url
+            url=$(get_raw_url "$template")
+            download_and_replace "$url" "$dest" "@@REF@@" "$ref_for_workflow"
+        else
+            info "Skipping (not installed): $dest"
         fi
     done
 }
@@ -349,12 +357,10 @@ main() {
     info "Dry-run: ${DRY_RUN}"
     printf "\n"
 
-    # カスタマイズ検出
-    detect_customizations
-
     # 更新実行
     update_safe_files
     update_customizable_files
+    update_reusable_workflows
 
     printf "\n"
     success "Update complete!"
