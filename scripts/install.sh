@@ -164,6 +164,16 @@ get_ref() {
     fi
 }
 
+get_ref_for_workflow() {
+    local ref
+    ref=$(get_ref)
+    if [[ "$ref" == "master" ]]; then
+        echo "@master"
+    else
+        echo "@$ref"
+    fi
+}
+
 get_raw_url() {
     local path="$1"
     local ref
@@ -269,8 +279,6 @@ declare -a CLAUDE_FILES=(
 )
 
 declare -a WORKFLOW_FILES=(
-    ".github/workflows/claude.yml"
-    ".github/workflows/claude_review.yml"
     ".github/workflows/sync_templates.yml"
     ".github/pull_request_template.md"
     ".github/ISSUE_TEMPLATE/agent_task.md"
@@ -291,9 +299,68 @@ install_claude_directory() {
     done
 }
 
+download_and_replace() {
+    local url="$1"
+    local dest="$2"
+    local placeholder="$3"
+    local replacement="$4"
+
+    local temp_file
+    temp_file=$(mktemp)
+
+    if is_true "$DRY_RUN"; then
+        info "[DRY-RUN] Would download and replace: $url -> $dest"
+        return 0
+    fi
+
+    if ! curl -fsSL "$url" -o "$temp_file"; then
+        error "Failed to download template: $url"
+        rm "$temp_file"
+        return 1
+    fi
+
+    # sed を使ってプレースホルダーを置換
+    # sed -i は環境によって挙動が違うため、リダイレクトで上書きする
+    sed "s/${placeholder}/${replacement}/g" "$temp_file" > "$dest"
+    rm "$temp_file"
+
+    success "Created: $dest"
+}
+
+
+create_reusable_workflows() {
+    info "Creating reusable workflow files..."
+    local ref_for_workflow
+    ref_for_workflow=$(get_ref_for_workflow)
+
+    local claude_yml_url
+    claude_yml_url=$(get_raw_url "examples/.github/workflows/claude.yml.template")
+    local claude_yml_dest="${TARGET_DIR}/.github/workflows/claude.yml"
+
+    local claude_review_yml_url
+    claude_review_yml_url=$(get_raw_url "examples/.github/workflows/claude_review.yml.template")
+    local claude_review_yml_dest="${TARGET_DIR}/.github/workflows/claude_review.yml"
+
+    if [[ -e "$claude_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $claude_yml_dest"
+    else
+        download_and_replace "$claude_yml_url" "$claude_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
+
+    if [[ -e "$claude_review_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $claude_review_yml_dest"
+    else
+        download_and_replace "$claude_review_yml_url" "$claude_review_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
+}
+
 install_github_workflows() {
     info "Installing .github/ directory..."
 
+    # Reusable workflow ファイルを作成
+    create_reusable_workflows
+
+    # その他のワークフロー関連ファイルをダウンロード
     for file in "${WORKFLOW_FILES[@]}"; do
         download_file "$(get_raw_url "$file")" "${TARGET_DIR}/${file}"
     done
@@ -347,7 +414,7 @@ main() {
     info "Next steps:"
     printf "  1. Add CLAUDE_CODE_OAUTH_TOKEN to your repository secrets\n"
     printf "  2. Customize .claude/rules/ for your project\n"
-    printf "  3. Adjust .github/workflows/claude.yml for your language/framework\n"
+    printf "  3. Adjust .github/workflows/claude.yml for your language/framework (see 'allowed_tools')\n"
     printf "\n"
     info "Documentation: https://github.com/${REPO_OWNER}/${REPO_NAME}"
 }

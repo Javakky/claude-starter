@@ -1,0 +1,16 @@
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    uses: Javakky/claude-starter/.github/workflows/reusable-claude-review.yml@@REF@@
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    with:
+      # オプション（省略可）
+      # model: 'haiku'
+      # max_turns: 25
+      # prompt: '/review'
