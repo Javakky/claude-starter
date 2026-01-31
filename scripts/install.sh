@@ -285,6 +285,7 @@ declare -a WORKFLOW_FILES=(
 )
 
 declare -a SCRIPTS_AND_DOCS_FILES=(
+    "CLAUDE.md"
     "scripts/sync_templates.py"
     "docs/agent/TASK.md"
     "docs/agent/PR.md"

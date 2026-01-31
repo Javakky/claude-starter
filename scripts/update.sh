@@ -262,6 +262,7 @@ download_and_replace() {
 
 # === ファイル一覧（1箇所で管理） ===
 declare -a SAFE_FILES=(
+    "CLAUDE.md"
     ".claude/commands/implement.md"
     ".claude/commands/fix_ci.md"
     ".claude/commands/review_prep.md"
