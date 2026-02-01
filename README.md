@@ -1,101 +1,42 @@
 # Claude Starter
 
-任意のリポジトリで Claude Code による自動開発・レビュー機能を簡単に導入できるセットアップツールです。言語やフレームワークに依存せず、開発ワークフローを効率化します。
+**Claude Starter** は、AIによる開発支援 (`claude-code-action`) を、あなたのリポジトリに数分で導入するためのスターターキットです。言語やフレームワークを問わず、IssueコメントやPull Requestをトリガーとしたコード生成・自動レビューの環境を簡単に構築できます。
 
-## 概要
+## 主な機能
 
-Claude Starter は、AIを活用した開発支援をあなたのリポジトリに統合するための以下の機能を提供します。
-
--   **インストールスクリプト**: ワンライナーで必要なファイルを簡単にセットアップ。
--   **GitHub Actions**: Issue/PR コメントへの自動応答、Pull Request の自動レビュー機能。
--   **.claude/ ディレクトリ**: Claude の振る舞いを定義するプロンプトとルール。
--   **更新スクリプト**: 導入後の設定ファイルを簡単に最新の状態に保ちます。
+-   **🚀 簡単な導入**: `curl | bash` のワンライナーで、必要な設定ファイル一式をリポジトリに自動で配置します。
+-   **💬 コメントベースのタスク実行**: `@claude implement ...` のようにIssueやPRでコメントするだけで、機能実装、リファクタリング、CIの修正などをAIに依頼できます。
+-   **🤖 PRの自動レビュー**: Pull Requestが作成・更新されると、Claudeが自動でコードをレビューし、コメントします。
+-   **🧠 インテリジェントな重複実行防止**: ユーザーが指示を修正した場合（例: コメントの追加）、実行中の古いタスクを自動でキャンセルし、常に最新の指示を優先します。
+-   **🔧 高いカスタマイズ性**: `.claude/` ディレクトリ内のファイルを編集するだけで、AIの振る舞いやコーディング規約、レビューの観点をプロジェクトに合わせて柔軟に調整できます。
+-   **🔄 簡単な更新**: 導入後も、`update.sh` スクリプトを実行するだけで、`claude-starter` の設定を簡単に最新版へ更新できます。
 
 ## クイックスタート
 
-Claude Starter をあなたのリポジトリに導入するには、以下のコマンドを実行してください。
+### 1. インストール
+
+お使いのリポジトリのルートディレクトリで、以下のコマンドを実行します。
 
 ```bash
 curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
 ```
+> ⚠️ **セキュリティ**: `curl | bash` を実行する前に、[スクリプトの内容](https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh)を確認することを推奨します。
 
-> ⚠️ **セキュリティに関する注意**: `curl | bash` パターンを実行する前に、必ずスクリプトの内容を確認してください。
+### 2. シークレットの設定
 
-インストール後、以下の2つの設定を行ってください。
+リポジトリの `Settings` > `Secrets and variables` > `Actions` に移動し、以下のシークレットを登録します。
 
-1.  **リポジトリシークレットの設定**: GitHub リポジトリの `Settings` > `Secrets and variables` > `Actions` に `CLAUDE_CODE_OAUTH_TOKEN` を追加します。
-2.  **ワークフローのカスタマイズ**: プロジェクトに合わせて `.github/workflows/claude.yml` の環境設定部分などを編集します。
+-   **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
+-   **Value**: あなたの Claude Code OAuth トークン
 
-詳細な手順やオプションについては、[インストールガイド](docs/INSTALLATION.md) を参照してください。
+### 3. 試してみる
 
-## `.github/workflows/claude.yml` のサンプル
+Issueを作成し、`@claude こんにちは！` とコメントして、Claudeが応答するか確認してみましょう。
 
-以下は、Node.js プロジェクトで `claude.yml` を利用する際のサンプルです。インストールスクリプトによって、ユーザーの最新の指示を優先するための重複実行防止ロジックが組み込まれた、シンプルなワークフローが生成されます。
+---
 
-```yaml
-name: Claude
-
-on:
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: write
-  pull-requests: read # PR情報を読み取るために必要
-  issues: write
-  actions: write # 実行中のワークフローをキャンセルするために必要
-
-jobs:
-  claude:
-    runs-on: ubuntu-latest
-    if: contains(github.event.comment.body, '@claude')
-    steps:
-      # 実行準備と競合ワークフローの処理
-      - name: Prepare Claude Run
-        id: prepare
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master
-
-      # リポジトリをチェックアウト
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.prepare.outputs.head_sha }}
-          fetch-depth: 0
-
-      # プロジェクトの環境設定 (例: Node.js)
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install dependencies
-        run: npm install
-
-      # Claude を実行
-      - name: Run Claude
-        uses: Javakky/claude-starter/.github/actions/run-claude@master
-        with:
-          github_token: ${{ github.token }}
-          comment_body: ${{ github.event.comment.body }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 必要に応じてデフォルト値をオーバーライド
-          # allowed_tools: |
-          #   Bash(npm run lint)
-```
-
-## 主な機能
-
--   **Issue/PR コメントでの Claude 呼び出し**: `@claude [implement]` のようにメンションすることで、機能実装、CI修正、リファクタリングなどを依頼できます。
--   **インテリジェントな重複実行防止**: 複数の指示が連続して送られた場合、古いタスクを自動でキャンセルし、常に最新の指示を優先します。
--   **Pull Request の自動レビュー**: PRが作成・更新されると、Claude が自動でコードレビューを実行します。
--   **プロンプトとルールのカスタマイズ**: `.claude/` ディレクトリ内のファイルを編集し、Claude の振る舞いをプロジェクトに合わせて調整できます。
-
-## ドキュメント
-
--   [**INSTALLATION.md**](docs/INSTALLATION.md) - 詳細なインストールガイド、更新方法、各設定の解説
--   [**PACKAGE_COMPARISON.md**](docs/PACKAGE_COMPARISON.md) - シェルスクリプトと他の配布方法の比較
--   [**GITHUB_WORKFLOWS.md**](docs/GITHUB_WORKFLOWS.md) - GitHub Workflows の設定ガイド
+より詳細な設定やカスタマイズ方法については、[**インストールガイド (INSTALLATION.md)**](docs/INSTALLATION.md) を参照してください。
 
 ## ライセンス
 
-このプロジェクトは MIT ライセンスの下で公開されています。
+このプロジェクトは [MIT License](LICENSE.md) の下で公開されています。
