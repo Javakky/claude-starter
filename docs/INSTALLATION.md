@@ -92,7 +92,7 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 #### `.github/workflows/claude.yml` のサンプル
 
 ```yaml
-name: Claude
+name: Claude Code
 
 on:
   issue_comment:

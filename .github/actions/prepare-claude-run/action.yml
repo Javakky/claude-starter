@@ -51,7 +51,12 @@ runs:
           });
 
           const conflictingRuns = runs.workflow_runs.filter(run => {
-            return run.id !== parseInt(process.env.CURRENT_RUN_ID) && (run.name === 'Claude' || run.name === 'Claude Code' || run.name === 'Claude Review');
+            // 自分自身の実行は除外
+            if (run.id === parseInt(process.env.CURRENT_RUN_ID)) {
+              return false;
+            }
+            // 実行中の 'Claude Code' または 'Claude Review' ワークフローをチェック
+            return run.name === 'Claude Code' || run.name === 'Claude Review';
           });
 
           if (conflictingRuns.length > 0) {
