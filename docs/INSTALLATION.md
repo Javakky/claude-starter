@@ -50,26 +50,12 @@ your-project/
 ├── scripts/
 │   └── sync_templates.py
 │   ├── install.sh        # このインストールスクリプト
-│   └── update.sh         # 更新用スクリプト
 ├── docs/
 │   └── agent/
 │       ├── TASK.md
 │       └── PR.md
 └── CLAUDE.md                 # Claudeの基本的な使い方ガイド
 ```
-
-### 更新方法
-
-`claude-starter` の設定ファイルを最新版に更新するには、以下のスクリプトを実行します。
-
-```bash
-# 最新版に更新（既存ファイルはバックアップされます）
-./scripts/update.sh
-
-# 特定のバージョンに更新
-./scripts/update.sh --version v1.2.0
-```
-
 ---
 
 ## 必須設定
