@@ -1,0 +1,85 @@
+name: 'Run Claude'
+description: 'Resolves options, builds tools, and runs the Claude Code Action'
+
+inputs:
+  github_token:
+    description: 'GitHub token'
+    required: true
+  comment_body:
+    description: 'The body of the comment that triggered the workflow'
+    required: true
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth Token'
+    required: true
+  default_model:
+    description: 'Default Claude model'
+    required: false
+    default: 'sonnet'
+  default_max_turns:
+    description: 'Default max turns'
+    required: false
+    default: '100'
+  allowed_tools:
+    description: 'Additional allowed tools (newline-separated)'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check trigger condition
+      id: trigger
+      shell: bash
+      run: |
+        if [[ "${{ inputs.comment_body }}" =~ "@claude" ]]; then
+          echo "triggered=true" >> $GITHUB_OUTPUT
+        else
+          echo "Comment does not contain '@claude'. Skipping."
+          echo "triggered=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Resolve Claude options
+      if: steps.trigger.outputs.triggered == 'true'
+      id: opts
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const body = `${{ inputs.comment_body }}`;
+
+          // モデル解析
+          const model =
+            body.includes("[sonnet]")  ? "sonnet" :
+            body.includes("[opus]")  ? "opus" :
+            body.includes("[haiku]") ? "haiku" : "${{ inputs.default_model }}";
+
+          // ターン数解析
+          const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
+          const maxTurns = m ? Number(m[1]) : ${{ inputs.default_max_turns }};
+
+          core.setOutput("model", model);
+          core.setOutput("max_turns", String(maxTurns));
+
+    - name: Build allowed tools
+      if: steps.trigger.outputs.triggered == 'true'
+      id: tools
+      shell: bash
+      run: |
+        TOOLS=""
+        CUSTOM_TOOLS="${{ inputs.allowed_tools }}"
+        if [ -n "$CUSTOM_TOOLS" ]; then
+          while IFS= read -r tool; do
+            [ -n "$tool" ] && TOOLS="$TOOLS --allowedTools \"$tool\""
+          done <<< "$CUSTOM_TOOLS"
+        fi
+        echo "tools=$TOOLS" >> $GITHUB_OUTPUT
+
+    - name: Run Claude Code Action
+      if: steps.trigger.outputs.triggered == 'true'
+      uses: anthropics/claude-code-action@v1
+      with:
+        github_token: ${{ inputs.github_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_args: >-
+          --model ${{ steps.opts.outputs.model }}
+          --max-turns ${{ steps.opts.outputs.max_turns }}
+          ${{ steps.tools.outputs.tools }}

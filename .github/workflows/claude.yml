@@ -10,12 +10,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  actions: read
+  actions: write # workflow runsの読み書きに必要
   id-token: write
-
-concurrency:
-  group: claude-branch-${{ github.head_ref || format('issue-{0}', github.event.issue.number) }}
-  cancel-in-progress: true
 
 jobs:
   claude:
@@ -24,36 +20,66 @@ jobs:
     if: contains(github.event.comment.body, '@claude') && !contains(github.event.comment.body, '[review]')
 
     steps:
+      - name: Get PR info
+        id: pr_info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (!context.payload.issue.pull_request) {
+              core.warning('Comment is not on a PR. Skipping conflict check.');
+              core.setOutput('should_skip_check', 'true');
+              return;
+            }
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('should_skip_check', 'false');
+
+      - name: Handle conflicting workflows
+        if: steps.pr_info.outputs.should_skip_check == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const headRef = "${{ steps.pr_info.outputs.head_ref }}";
+            const currentRunId = ${{ github.run_id }};
+
+            const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: headRef,
+              status: 'in_progress'
+            });
+
+            const conflictingRuns = runs.workflow_runs.filter(run => {
+              return run.id !== currentRunId && (run.name === 'Claude Code' || run.name === 'Claude Review');
+            });
+
+            if (conflictingRuns.length > 0) {
+              core.warning(`Found ${conflictingRuns.length} conflicting runs. Cancelling them...`);
+              for (const run of conflictingRuns) {
+                core.warning(`- Cancelling run #${run.id} (${run.name})`);
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id
+                });
+              }
+              core.info("Proceeding with this run as it contains the latest instructions.");
+            }
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # 理想としてはプロジェクトにあった言語実行環境が追加されているべき
-      - name: Resolve Claude options
-        id: opts
-        uses: actions/github-script@v7
+
+      - name: Run Claude
+        uses: ./../actions/run-claude # Use the local composite action for dogfooding
         with:
-          script: |
-            const body = context.payload.comment?.body ?? "";
-            const model =
-              body.includes("[sonnet]")  ? "sonnet" :
-              body.includes("[opus]")  ? "opus" :
-              body.includes("[haiku]") ? "haiku" : "sonnet";
-            
-            const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-            const maxTurns = m ? Number(m[1]) : 10;
-            
-            core.setOutput("model", model);
-            core.setOutput("max_turns", String(maxTurns));
-      - name: Run Claude Code Action
-        uses: anthropics/claude-code-action@v1
-        with:
+          github_token: ${{ github.token }}
+          comment_body: ${{ github.event.comment.body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: >-
-            --model ${{ steps.opts.outputs.model }}
-            --max-turns ${{ steps.opts.outputs.max_turns }}
-            --allowedTools "Bash(vendor/bin/php-cs-fixer fix:*)" "Bash(vendor/bin/phpstan analyse:*)" "Bash(vendor/bin/phpunit tests:*)"
-            --allowedTools "Bash(sbt scalafixAll)"
-            --allowedTools "Bash(sbt scalafmtAll)"
-            --allowedTools "Bash(sbt scalafmtSbt)"
-            --allowedTools "Bash(sbt test)"
+          # このリポジトリではデフォルトを上書きしてテスト
+          default_max_turns: 300

@@ -120,7 +120,7 @@ jobs:
 
             // ターン数解析
             const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-            const maxTurns = m ? Number(m[1]) : 10;
+            const maxTurns = m ? Number(m[1]) : 100;
 
             core.setOutput("model", model);
             core.setOutput("max_turns", String(maxTurns));
