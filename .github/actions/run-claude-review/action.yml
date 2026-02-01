@@ -27,7 +27,6 @@ runs:
   steps:
     - name: Run Claude Review Action
       uses: anthropics/claude-code-action@v1
-      shell: bash
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         prompt: "${{ inputs.prompt }}"

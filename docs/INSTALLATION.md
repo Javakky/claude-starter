@@ -30,7 +30,6 @@ curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts
 ```
 
 ### インストールされるファイル
-
 スクリプトを実行すると、以下のファイルがプロジェクトに配置されます。
 
 ```
@@ -102,7 +101,7 @@ on:
 # 必要な権限
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read # PR情報を読み取るために必要
   issues: write
   actions: write # 実行中のワークフローをキャンセルするために必要
 
@@ -111,28 +110,19 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.comment.body, '@claude')
     steps:
-      # 1. PR情報を取得
-      - name: Get PR info
-        id: pr_info
-        uses: actions/github-script@v7
-        with:
-          script: |
-            # ... (PR情報を取得するスクリプト)
+      # 1. 実行準備と競合ワークフローの処理
+      - name: Prepare Claude Run
+        id: prepare
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master
 
-      # 2. 競合するワークフローをハンドル
-      - name: Handle conflicting workflows
-        uses: actions/github-script@v7
-        with:
-          script: |
-            # ... (競合ワークフローをキャンセルするスクリプト)
-
-      # 3. リポジトリをチェックアウト
+      # 2. リポジトリをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.prepare.outputs.head_sha }}
           fetch-depth: 0
 
-      # 4. プロジェクトの環境設定 (例: Node.js)
+      # 3. プロジェクトの環境設定 (例: Node.js)
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -141,7 +131,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 5. Claude を実行
+      # 4. Claude を実行
       - name: Run Claude
         uses: Javakky/claude-starter/.github/actions/run-claude@master
         with:
@@ -149,7 +139,6 @@ jobs:
           comment_body: ${{ github.event.comment.body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
-          # default_model: 'opus'
           # allowed_tools: |
           #   Bash(npm run lint)
           #   Bash(npm run test)
@@ -159,10 +148,68 @@ jobs:
 
 ## Composite Actions の詳細
 
-（このセクションは変更ありません）
+`claude-starter` は、ワークフローのロジックをカプセル化するために、いくつかの Composite Actions を提供します。これらを直接利用することで、より柔軟なワークフローを構築することも可能です。
+
+### `prepare-claude-run`
+
+**役割**: Claude の実行を準備し、競合する古いワークフローをキャンセルします。
+
+| 出力 (`outputs`) | 説明 |
+|---|---|
+| `head_sha` | 実行対象となる Pull Request の HEAD コミットの SHA。`actions/checkout` の `ref` に渡すために使います。 |
+
+### `run-claude`
+
+**役割**: Issue コメントを解析し、`anthropics/claude-code-action` を適切なパラメータで実行します。
+
+| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
+|---|---|:---:|---|
+| `github_token` | GitHub トークン。 | ✅ | |
+| `comment_body` | トリガーとなったコメントの本文。 | ✅ | |
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 | ✅ | |
+| `default_model` | デフォルトで使用するモデル。 | | `sonnet` |
+| `default_max_turns` | デフォルトの最大ターン数。 | | `10` |
+| `allowed_tools` | Claude に許可する追加のツール（改行区切り）。 | | (空) |
+
+### `run-claude-review`
+
+**役割**: Pull Request の自動レビューを実行します。
+
+| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
+|---|---|:---:|---|
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 | ✅ | |
+| `model` | レビューに使用するモデル。 | | `haiku` |
+| `max_turns` | 最大ターン数。 | | `25` |
+| `prompt` | レビューを依頼する際のプロンプト。 | | `/review` |
+| `allowed_bots` | 応答を許可するボット名。 | | `claude[bot]` |
 
 ---
 
 ## 手動での導入
 
-（このセクションは変更ありません）
+インストールスクリプトを使わずに、必要なファイルを手動でリポジトリに配置することも可能です。
+
+### 1. 必要なファイルをコピーする
+
+`claude-starter` リポジトリから、以下のディレクトリとファイルをあなたのプロジェクトにコピーします。
+
+-   `.claude/` (ディレクトリ全体)
+-   `.github/actions/` (ディレクトリ全体。`prepare-claude-run`, `run-claude`, `run-claude-review` を含みます)
+-   `.github/workflows/claude.yml`
+-   `.github/workflows/claude_review.yml`
+
+### 2. ワークフローを調整する
+
+コピーした `.github/workflows/claude.yml` と `claude_review.yml` を開き、`uses:` のパスを調整します。
+
+`claude-starter` リポジトリを直接参照するのではなく、あなたのリポジトリ内にコピーしたローカルのアクションを参照するように変更します。
+
+**変更前:**
+`uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master`
+
+**変更後:**
+`uses: ./.github/actions/prepare-claude-run`
+
+### 3. 必須設定を行う
+
+上記「必須設定」セクションの指示に従い、`CLAUDE_CODE_OAUTH_TOKEN` の設定と、ワークフローのカスタマイズを行ってください。

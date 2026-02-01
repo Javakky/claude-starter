@@ -261,6 +261,14 @@ download_and_replace() {
 }
 
 # === ファイル一覧（1箇所で管理） ===
+
+# 新しく追加: Composite Actions のファイルリスト
+declare -a ACTION_FILES=(
+    ".github/actions/prepare-claude-run/action.yml"
+    ".github/actions/run-claude/action.yml"
+    ".github/actions/run-claude-review/action.yml"
+)
+
 declare -a SAFE_FILES=(
     "CLAUDE.md"
     ".claude/commands/implement.md"
@@ -287,6 +295,20 @@ declare -a CUSTOMIZABLE_FILES=(
 )
 
 # === メイン処理 ===
+
+# 新しく追加: アクションファイルを更新する関数
+update_actions() {
+    info "Updating Composite Actions..."
+    for file in "${ACTION_FILES[@]}"; do
+        local dest="${TARGET_DIR}/${file}"
+        if [[ -f "$dest" ]]; then
+            download_file "$(get_raw_url "$file")" "$dest"
+        else
+            info "Skipping (not installed): $file"
+        fi
+    done
+}
+
 update_safe_files() {
     info "Updating safe files..."
     for file in "${SAFE_FILES[@]}"; do
@@ -311,8 +333,8 @@ update_customizable_files() {
     done
 }
 
-update_reusable_workflows() {
-    info "Updating reusable workflow files from templates..."
+update_workflow_templates() { # 関数名を変更
+    info "Updating workflow files from templates..."
     local ref_for_workflow
     ref_for_workflow=$(get_ref_for_workflow)
 
@@ -339,13 +361,12 @@ update_reusable_workflows() {
 main() {
     parse_args "$@"
 
+    # (中略) ... ヘッダー表示と事前検証は変更なし ...
     printf "\n"
     printf "╔════════════════════════════════════════╗\n"
     printf "║     Claude Starter - Updater           ║\n"
     printf "╚════════════════════════════════════════╝\n"
     printf "\n"
-
-    # 事前検証
     validate_target_dir
     validate_ref
 
@@ -359,9 +380,10 @@ main() {
     printf "\n"
 
     # 更新実行
+    update_actions # 新しい関数を呼び出す
     update_safe_files
     update_customizable_files
-    update_reusable_workflows
+    update_workflow_templates # 関数名を変更
 
     printf "\n"
     success "Update complete!"
