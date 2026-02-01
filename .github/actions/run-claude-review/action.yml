@@ -1,0 +1,39 @@
+name: 'Run Claude Review'
+description: 'Runs the Claude Code Action for PR reviews'
+
+inputs:
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth Token'
+    required: true
+  model:
+    description: 'Claude model (sonnet/opus/haiku)'
+    required: false
+    default: 'haiku'
+  max_turns:
+    description: 'Max turns'
+    required: false
+    default: '30'
+  prompt:
+    description: 'Review prompt'
+    required: false
+    default: '/review'
+  allowed_bots:
+    description: 'Allowed bots'
+    required: false
+    default: 'claude[bot]'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run Claude Review Action
+      uses: anthropics/claude-code-action@v1
+      shell: bash
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        prompt: "${{ inputs.prompt }}"
+        track_progress: true
+        allowed_bots: "${{ inputs.allowed_bots }}"
+        claude_args: |
+          --model ${{ inputs.model }}
+          --max-turns ${{ inputs.max_turns }}
+          --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"

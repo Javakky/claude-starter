@@ -3,27 +3,19 @@ name: Claude Review
 on:
   pull_request:
     types: [ opened, synchronize ]
-  issue_comment: # 追加
+  issue_comment:
     types: [ created ]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: read
+  actions: write # workflow runsの読み書きに必要
   id-token: write
-
-# ブランチ単位で排他制御（レビュー/開発を同一グループに）
-# 新しいレビューまたは開発が開始されたら、実行中のレビューはキャンセル
-# コメントトリガー時は head_ref、PRイベント時は pull_request.head.ref を使用
-concurrency:
-  group: claude-branch-${{ github.event.pull_request.head.ref || github.head_ref || format('issue-{0}', github.event.issue.number) }}
-  cancel-in-progress: true
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    # PR作成/更新時、または @claude [review] コメント時に実行
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' &&
@@ -32,77 +24,68 @@ jobs:
         contains(github.event.comment.body, '[review]'))
 
     steps:
-      - name: Get PR info (for comment trigger)
+      - name: Get PR info
         id: pr_info
-        if: github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            core.setOutput('head_sha', pr.data.head.sha);
-            core.setOutput('head_ref', pr.data.head.ref);
+            let prNumber, headSha, headRef;
+            if (context.eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+              headSha = context.payload.pull_request.head.sha;
+              headRef = context.payload.pull_request.head.ref;
+            } else { // issue_comment
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              prNumber = context.issue.number;
+              headSha = pr.head.sha;
+              headRef = pr.head.ref;
+            }
+            core.setOutput('pr_number', prNumber);
+            core.setOutput('head_sha', headSha);
+            core.setOutput('head_ref', headRef);
 
-      - name: Check if Claude Code workflow is running
-        id: check_claude_code
+      - name: Handle conflicting workflows
         uses: actions/github-script@v7
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref || steps.pr_info.outputs.head_ref }}
         with:
           script: |
-            const headRef = process.env.HEAD_REF;
-            if (!headRef) {
-              core.setOutput('should_skip', 'false');
-              return;
-            }
+            const headRef = "${{ steps.pr_info.outputs.head_ref }}";
+            const currentRunId = ${{ github.run_id }};
 
-            // 同一ブランチで実行中の Claude Code ワークフローをチェック
-            const runs = await github.rest.actions.listWorkflowRuns({
+            const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'claude.yml',
-              status: 'in_progress',
-              head_sha: undefined
+              branch: headRef,
+              status: 'in_progress'
             });
 
-            // 同一ブランチかつ実行中かつ自分自身でないワークフローがあるかチェック
-            const runningOnBranch = runs.data.workflow_runs.some(run =>
-              run.head_branch === headRef &&
-              run.id !== context.runId
-            );
+            const conflictingRuns = runs.workflow_runs.filter(run => {
+              return run.id !== currentRunId && (run.name === 'Claude Code' || run.name === 'Claude Review');
+            });
 
-            if (runningOnBranch) {
-              core.warning(`Claude Code workflow is running on branch ${headRef}. Skipping review.`);
-              core.setOutput('should_skip', 'true');
-            } else {
-              core.setOutput('should_skip', 'false');
+            if (conflictingRuns.length > 0) {
+              core.warning(`Found ${conflictingRuns.length} conflicting runs. Cancelling them...`);
+              for (const run of conflictingRuns) {
+                core.warning(`- Cancelling run #${run.id} (${run.name})`);
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id
+                });
+              }
+              core.info("Proceeding with this run as it contains the latest instructions.");
             }
-
-      - name: Skip if Claude Code is running
-        if: steps.check_claude_code.outputs.should_skip == 'true'
-        run: |
-          echo "::notice::Skipping review because Claude Code workflow is running on the same branch."
-          exit 0
 
       - name: Checkout repository
-        if: steps.check_claude_code.outputs.should_skip != 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || steps.pr_info.outputs.head_sha }}
+          ref: ${{ steps.pr_info.outputs.head_sha }}
           fetch-depth: 0
 
       - name: Run Claude Review
-        if: steps.check_claude_code.outputs.should_skip != 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: ./../actions/run-claude-review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: "/review"
-          track_progress: true
-          allowed_bots: "claude[bot]"
-          claude_args: |
-            --model haiku
-            --max-turns 25
-            --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
