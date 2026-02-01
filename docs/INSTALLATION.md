@@ -49,6 +49,8 @@ your-project/
 │       └── agent_task.md
 ├── scripts/
 │   └── sync_templates.py
+│   ├── install.sh        # このインストールスクリプト
+│   └── update.sh         # 更新用スクリプト
 ├── docs/
 │   └── agent/
 │       ├── TASK.md

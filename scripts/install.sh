@@ -293,6 +293,8 @@ declare -a WORKFLOW_FILES=(
 
 declare -a SCRIPTS_AND_DOCS_FILES=(
     "CLAUDE.md"
+    "scripts/install.sh" # このスクリプト自体
+    "scripts/update.sh"  # 更新用スクリプト
     "scripts/sync_templates.py"
     "docs/agent/TASK.md"
     "docs/agent/PR.md"
