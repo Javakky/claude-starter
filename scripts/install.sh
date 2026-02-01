@@ -278,6 +278,13 @@ declare -a CLAUDE_FILES=(
     ".claude/rules/40_output.md"
 )
 
+# 新しく追加: Composite Actions のファイルリスト
+declare -a ACTION_FILES=(
+    ".github/actions/prepare-claude-run/action.yml"
+    ".github/actions/run-claude/action.yml"
+    ".github/actions/run-claude-review/action.yml"
+)
+
 declare -a WORKFLOW_FILES=(
     ".github/workflows/sync_templates.yml"
     ".github/pull_request_template.md"
@@ -294,7 +301,6 @@ declare -a SCRIPTS_AND_DOCS_FILES=(
 # === メイン処理 ===
 install_claude_directory() {
     info "Installing .claude/ directory..."
-
     for file in "${CLAUDE_FILES[@]}"; do
         download_file "$(get_raw_url "$file")" "${TARGET_DIR}/${file}"
     done
@@ -305,32 +311,26 @@ download_and_replace() {
     local dest="$2"
     local placeholder="$3"
     local replacement="$4"
-
     local temp_file
     temp_file=$(mktemp)
-
     if is_true "$DRY_RUN"; then
         info "[DRY-RUN] Would download and replace: $url -> $dest"
         return 0
     fi
-
     if ! curl -fsSL "$url" -o "$temp_file"; then
         error "Failed to download template: $url"
         rm "$temp_file"
         return 1
     fi
-
     # sed を使ってプレースホルダーを置換
     # sed -i は環境によって挙動が違うため、リダイレクトで上書きする
     sed "s/${placeholder}/${replacement}/g" "$temp_file" > "$dest"
     rm "$temp_file"
-
     success "Created: $dest"
 }
 
-
-create_reusable_workflows() {
-    info "Creating reusable workflow files..."
+create_workflow_files() {
+    info "Creating workflow files from templates..."
     local ref_for_workflow
     ref_for_workflow=$(get_ref_for_workflow)
 
@@ -355,11 +355,16 @@ create_reusable_workflows() {
     fi
 }
 
-install_github_workflows() {
-    info "Installing .github/ directory..."
+install_github_directory() {
+    info "Installing .github/ directory contents..."
 
-    # Reusable workflow ファイルを作成
-    create_reusable_workflows
+    # Composite Actions をインストール
+    for file in "${ACTION_FILES[@]}"; do
+        download_file "$(get_raw_url "$file")" "${TARGET_DIR}/${file}"
+    done
+
+    # ワークフローテンプレートからファイルを作成
+    create_workflow_files
 
     # その他のワークフロー関連ファイルをダウンロード
     for file in "${WORKFLOW_FILES[@]}"; do
@@ -369,7 +374,6 @@ install_github_workflows() {
 
 install_scripts_and_docs() {
     info "Installing scripts and docs..."
-
     for file in "${SCRIPTS_AND_DOCS_FILES[@]}"; do
         download_file "$(get_raw_url "$file")" "${TARGET_DIR}/${file}"
     done
@@ -377,17 +381,13 @@ install_scripts_and_docs() {
 
 main() {
     parse_args "$@"
-
     printf "\n"
     printf "╔════════════════════════════════════════╗\n"
     printf "║     Claude Starter - Installer         ║\n"
     printf "╚════════════════════════════════════════╝\n"
     printf "\n"
-
-    # 事前検証
     validate_target_dir
     validate_ref
-
     local ref
     ref=$(get_ref)
     info "Repository: ${REPO_OWNER}/${REPO_NAME}"
@@ -397,16 +397,15 @@ main() {
     info "Dry-run: ${DRY_RUN}"
     printf "\n"
 
-    # インストール実行
     if ! is_true "$NO_CLAUDE"; then
         install_claude_directory
     fi
 
     if ! is_true "$NO_WORKFLOWS"; then
-        install_github_workflows
+        # 関数名を install_github_workflows から install_github_directory に変更
+        install_github_directory
     fi
 
-    # scripts と docs は常にインストール
     install_scripts_and_docs
 
     printf "\n"

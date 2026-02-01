@@ -1,0 +1,72 @@
+name: 'Prepare Claude Run'
+description: 'Gets PR info and cancels conflicting workflow runs to ensure the latest instruction is executed.'
+
+outputs:
+  head_sha:
+    description: 'The SHA of the PR head commit.'
+    value: ${{ steps.prepare.outputs.head_sha }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get PR info and handle conflicts
+      id: prepare
+      uses: actions/github-script@v7
+      env:
+        CURRENT_RUN_ID: ${{ github.run_id }}
+      with:
+        script: |
+          let headSha = '';
+          let headRef = '';
+
+          if (context.eventName === 'pull_request') {
+            headSha = context.payload.pull_request.head.sha;
+            headRef = context.payload.pull_request.head.ref;
+          } else if (context.payload.issue && context.payload.issue.pull_request) {
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            headSha = pr.head.sha;
+            headRef = pr.head.ref;
+          } else {
+            core.info('Not a PR-related event. Skipping conflict check.');
+            core.setOutput('head_sha', '');
+            return;
+          }
+
+          core.setOutput('head_sha', headSha);
+
+          if (!headRef) {
+            core.info('Could not determine branch. Skipping conflict check.');
+            return;
+          }
+
+          const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            branch: headRef,
+            status: 'in_progress'
+          });
+
+          const conflictingRuns = runs.workflow_runs.filter(run => {
+            return run.id !== parseInt(process.env.CURRENT_RUN_ID) && (run.name === 'Claude' || run.name === 'Claude Code' || run.name === 'Claude Review');
+          });
+
+          if (conflictingRuns.length > 0) {
+            core.warning(`Found ${conflictingRuns.length} conflicting runs. Cancelling them...`);
+            for (const run of conflictingRuns) {
+              core.warning(`- Cancelling run #${run.id} (${run.name})`);
+              try {
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id
+                });
+              } catch (error) {
+                core.error(`Failed to cancel run #${run.id}: ${error.message}`);
+              }
+            }
+            core.info("Proceeding with this run as it contains the latest instructions.");
+          }

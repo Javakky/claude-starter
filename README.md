@@ -20,13 +20,6 @@ curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts
 ```
 
 > ⚠️ **セキュリティに関する注意**: `curl | bash` パターンを実行する前に、必ずスクリプトの内容を確認してください。
->
-> ```bash
-> # スクリプトの内容を確認してから実行する方法
-> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh -o install.sh
-> cat install.sh  # 内容を確認
-> chmod +x install.sh && ./install.sh
-> ```
 
 インストール後、以下の2つの設定を行ってください。
 
@@ -37,7 +30,7 @@ curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts
 
 ## `.github/workflows/claude.yml` のサンプル
 
-以下は、Node.js プロジェクトで `claude.yml` を利用する際のサンプルです。インストールスクリプトによって、ユーザーの最新の指示を優先するための重複実行防止ロジックが組み込まれたワークフローが生成されます。
+以下は、Node.js プロジェクトで `claude.yml` を利用する際のサンプルです。インストールスクリプトによって、ユーザーの最新の指示を優先するための重複実行防止ロジックが組み込まれた、シンプルなワークフローが生成されます。
 
 ```yaml
 name: Claude
@@ -48,7 +41,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read # PR情報を読み取るために必要
   issues: write
   actions: write # 実行中のワークフローをキャンセルするために必要
 
@@ -57,11 +50,16 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.comment.body, '@claude')
     steps:
-      # ... (競合ワークフローのハンドル処理)
+      # 実行準備と競合ワークフローの処理
+      - name: Prepare Claude Run
+        id: prepare
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master
 
+      # リポジトリをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.prepare.outputs.head_sha }}
           fetch-depth: 0
 
       # プロジェクトの環境設定 (例: Node.js)
@@ -83,7 +81,6 @@ jobs:
           # 必要に応じてデフォルト値をオーバーライド
           # allowed_tools: |
           #   Bash(npm run lint)
-          #   Bash(npm run test)
 ```
 
 ## 主な機能
@@ -96,7 +93,7 @@ jobs:
 ## ドキュメント
 
 -   [**INSTALLATION.md**](docs/INSTALLATION.md) - 詳細なインストールガイド、更新方法、各設定の解説
--   [**PACKAGE_COMPARISON.md**](docs.PACKAGE_COMPARISON.md) - シェルスクリプトと他の配布方法の比較
+-   [**PACKAGE_COMPARISON.md**](docs/PACKAGE_COMPARISON.md) - シェルスクリプトと他の配布方法の比較
 -   [**GITHUB_WORKFLOWS.md**](docs/GITHUB_WORKFLOWS.md) - GitHub Workflows の設定ガイド
 
 ## ライセンス
