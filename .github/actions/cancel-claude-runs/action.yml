@@ -1,0 +1,99 @@
+name: "Cancel Claude Runs"
+description: "Cancel queued/in_progress workflow runs for a given PR (robust matching)."
+
+inputs:
+  workflow_id:
+    description: "Workflow file name or ID to cancel runs (e.g. claude-review.yml)"
+    required: true
+  pr_number:
+    description: "PR number"
+    required: true
+  head_ref:
+    description: "PR head ref (branch)"
+    required: false
+    default: ""
+  head_sha:
+    description: "PR head sha"
+    required: false
+    default: ""
+  statuses:
+    description: "Comma-separated statuses to cancel"
+    required: false
+    default: "queued,in_progress"
+  max_workflow_runs_to_scan:
+    description: "Max workflow runs to scan"
+    required: false
+    default: "100"
+
+outputs:
+  canceled_count:
+    description: "Number of canceled runs"
+    value: ${{ steps.cancel.outputs.canceled_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: cancel
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const workflowId = String(core.getInput('workflow_id'));
+          const prNumber = Number(core.getInput('pr_number'));
+          const headRef = String(core.getInput('head_ref') || '');
+          const headSha = String(core.getInput('head_sha') || '');
+
+          const statuses = new Set(
+            String(core.getInput('statuses'))
+              .split(',')
+              .map(s => s.trim())
+              .filter(Boolean)
+          );
+
+          const maxRuns = Math.min(Math.max(Number(core.getInput('max_workflow_runs_to_scan') || '100'), 1), 100);
+          const key = `pr #${prNumber}`.toLowerCase();
+
+          const runsResp = await github.rest.actions.listWorkflowRunsForWorkflow({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: workflowId,
+            per_page: maxRuns,
+          });
+
+          const runs = runsResp.data?.workflow_runs || [];
+
+          function matches(r) {
+            // status filter
+            if (!statuses.has(r.status)) return false;
+
+            // 1) explicit PR linkage
+            const prs = r.pull_requests || [];
+            if (prs.some(p => p.number === prNumber)) return true;
+
+            // 2) run title includes "pr #NN"
+            const title = String(r.display_title || '').toLowerCase();
+            if (title.includes(key)) return true;
+
+            // 3) branch/sha fallback
+            if (headRef && String(r.head_branch || '') === headRef) return true;
+            if (headSha && String(r.head_sha || '') === headSha) return true;
+
+            return false;
+          }
+
+          const targets = runs.filter(r => r.id !== context.runId).filter(matches);
+
+          let canceled = 0;
+          for (const r of targets) {
+            try {
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: r.id,
+              });
+              canceled += 1;
+            } catch (e) {
+              // ignore (already completed / forbidden / etc.)
+            }
+          }
+
+          core.setOutput('canceled_count', String(canceled));

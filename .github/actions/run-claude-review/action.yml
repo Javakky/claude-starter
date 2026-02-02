@@ -1,26 +1,26 @@
-name: 'Run Claude Review'
-description: 'Runs the Claude Code Action for PR reviews'
+name: "Run Claude Review"
+description: "Runs the Claude Code Action for PR reviews"
 
 inputs:
   claude_code_oauth_token:
-    description: 'Claude Code OAuth Token'
+    description: "Claude Code OAuth Token"
     required: true
   model:
-    description: 'Claude model (sonnet/opus/haiku)'
+    description: "Claude model (sonnet/opus/haiku)"
     required: false
-    default: 'haiku'
+    default: "haiku"
   max_turns:
-    description: 'Max turns'
+    description: "Max turns"
     required: false
-    default: '30'
+    default: "30"
   prompt:
-    description: 'Review prompt'
+    description: "Review prompt"
     required: false
-    default: '/review'
+    default: "/review"
   allowed_bots:
-    description: 'Allowed bots'
+    description: "Allowed bots"
     required: false
-    default: 'claude[bot]'
+    default: "claude[bot]"
 
 runs:
   using: "composite"

@@ -1,11 +1,8 @@
-name: Claude
+name: Claude Implement
+run-name: claude-impl issue #${{ github.event.issue.number }}
 
 on:
-  pull_request:
-    types: [opened, synchronize]
   issue_comment:
-    types: [created]
-  pull_request_review_comment:
     types: [created]
 
 permissions:
@@ -16,54 +13,39 @@ permissions:
   id-token: write
 
 concurrency:
-  group: claude-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}-${{ github.event.sender.type == 'Bot' && 'bot' || 'user' }}
+  group: claude-impl-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
-  prepare:
-    if: github.event_name == 'pull_request' || github.actor != 'claude'
-    runs-on: ubuntu-latest
-    outputs:
-      run_type: ${{ steps.detect.outputs.run_type }}
-    steps:
-      - id: detect
-        shell: bash
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body || '' }}
-        run: |
-          body="$COMMENT_BODY"
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "run_type=review" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "$body" != *"@claude"* ]]; then
-            echo "run_type=skip" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "$body" == *"[review]"* ]]; then
-            echo "run_type=review" >> "$GITHUB_OUTPUT"
-          else
-            echo "run_type=task" >> "$GITHUB_OUTPUT"
-          fi
-
-  task:
-    needs: prepare
-    if: needs.prepare.outputs.run_type == 'task'
+  impl:
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare Claude Run
-        id: prepare
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
-        # No inputs needed for 'task' run type, it uses the context directly.
+      - name: Prepare context
+        id: prep
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
+        with:
+          mode: "implement"
+          impl_workflow_id: claude-impl.yml
+          create_pr_on_issue: "true"
+          issue_branch_prefix: "claude/issue-"
+          pr_title_prefix: "Claude:"
+          pr_body_template: |
+            This PR was created from issue #{{issue_number}}.
+
+      - name: Cancel running reviews for this PR
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
+        uses: Javakky/claude-starter/.github/actions/cancel-claude-runs@@REF@@
+        with:
+          workflow_id: claude-review.yml
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          head_ref: ${{ steps.prep.outputs.head_ref }}
+          head_sha: ${{ steps.prep.outputs.head_sha }}
 
       - name: Checkout repository
-        if: steps.prepare.outputs.should_run == 'true'
+        if: steps.prep.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.prepare.outputs.head_sha }}
+          ref: ${{ steps.prep.outputs.head_ref }}
           fetch-depth: 0
 
       # --- プロジェクトの環境設定をここに追加 ---
@@ -78,11 +60,11 @@ jobs:
       #   run: npm install
       # ------------------------------------
 
-      - name: Run Claude
-        if: steps.prepare.outputs.should_run == 'true'
+      - name: Run Claude (implement)
+        if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          comment_body: ${{ github.event.comment.body || github.event.pull_request.body || '' }}
+          comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
           # default_model: 'opus'
@@ -90,36 +72,3 @@ jobs:
           # allowed_tools: |
           #   Bash(npm run lint)
           #   Bash(npm run test)
-
-  review:
-    needs: prepare
-    if: needs.prepare.outputs.run_type == 'review'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout for history
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Prepare Claude Run
-        id: prepare
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
-        with:
-          run_type: 'review'
-          github_event_before: ${{ github.event.before }}
-          github_event_after: ${{ github.event.after }}
-
-      - name: Checkout PR head
-        if: steps.prepare.outputs.should_run == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.prepare.outputs.head_sha }}
-          fetch-depth: 0
-
-      - name: Run Claude Review
-        if: steps.prepare.outputs.should_run == 'true'
-        uses: Javakky/claude-starter/.github/actions/run-claude-review@@REF@@
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 必要に応じてデフォルト値をオーバーライド
-          # model: 'opus'
