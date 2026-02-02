@@ -33,7 +33,6 @@ jobs:
       - name: Run Claude
         uses: ./../actions/run-claude
         with:
-          github_token: ${{ github.token }}
           comment_body: ${{ github.event.comment.body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           default_max_turns: 300
