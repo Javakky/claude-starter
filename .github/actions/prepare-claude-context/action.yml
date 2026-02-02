@@ -1,0 +1,447 @@
+name: "Prepare Claude Context"
+description: "Classify event -> (review|implement|skip), authorize, gate, and resolve/create PR context."
+
+inputs:
+  mode:
+    description: "review or implement"
+    required: true
+
+  impl_workflow_id:
+    description: "Workflow file name or ID for Claude Implement (e.g. claude-impl.yml)"
+    required: true
+
+  # pr-sync review 用（pull_requestイベントにのみ適用）
+  skip_commit_prefixes:
+    description: "Comma-separated prefixes to skip pr-sync review (e.g. docs:,style:,chore:,wip:)"
+    required: false
+    default: "docs:,style:,chore:,wip:"
+  allow_final_sync_during_impl:
+    description: "Allow pull_request synchronize review during implement (heuristics)."
+    required: false
+    default: "true"
+  final_sync_commit_marker:
+    description: "If non-empty, allow synchronize during implement when HEAD commit message contains this marker (e.g. [claude-final])."
+    required: false
+    default: ""
+  allowed_comment_permissions:
+    description: "Comma-separated allowed permission levels for comment triggers"
+    required: false
+    default: "admin,maintain,write"
+  max_workflow_runs_to_scan:
+    description: "Max workflow runs to scan when checking implement running"
+    required: false
+    default: "50"
+
+  # ★ Issue implement 用
+  create_pr_on_issue:
+    description: "If true, create branch+PR when invoked on an Issue without existing PR."
+    required: false
+    default: "true"
+  issue_branch_prefix:
+    description: "Branch prefix for issue-based work (e.g. claude/issue-)"
+    required: false
+    default: "claude/issue-"
+  pr_title_prefix:
+    required: false
+    default: "Claude:"
+  pr_body_template:
+    description: "PR body template. Supports {{issue_number}}."
+    required: false
+    default: "Created from issue #{{issue_number}}."
+
+outputs:
+  should_run:
+    description: "true if the workflow should proceed"
+    value: ${{ steps.ctx.outputs.should_run }}
+  reason:
+    description: "reason for skip (debug)"
+    value: ${{ steps.ctx.outputs.reason }}
+  trigger_kind:
+    value: ${{ steps.ctx.outputs.trigger_kind }}
+
+  issue_number:
+    description: "Issue number"
+    value: ${{ steps.ctx.outputs.issue_number }}
+  pr_number:
+    description: "PR number"
+    value: ${{ steps.ctx.outputs.pr_number }}
+  head_sha:
+    description: "PR head sha"
+    value: ${{ steps.ctx.outputs.head_sha }}
+  head_ref:
+    description: "PR head ref (branch)"
+    value: ${{ steps.ctx.outputs.head_ref }}
+  comment_body:
+    description: "comment body if issue_comment, otherwise empty"
+    value: ${{ steps.ctx.outputs.comment_body }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: ctx
+      uses: actions/github-script@v7
+      env:
+        MODE: ${{ inputs.mode }}
+        IMPL_WORKFLOW_ID: ${{ inputs.impl_workflow_id }}
+
+        SKIP_COMMIT_PREFIXES: ${{ inputs.skip_commit_prefixes }}
+        ALLOW_FINAL_SYNC_DURING_IMPL: ${{ inputs.allow_final_sync_during_impl }}
+        FINAL_SYNC_COMMIT_MARKER: ${{ inputs.final_sync_commit_marker }}
+        ALLOWED_COMMENT_PERMISSIONS: ${{ inputs.allowed_comment_permissions }}
+        MAX_WORKFLOW_RUNS_TO_SCAN: ${{ inputs.max_workflow_runs_to_scan }}
+
+        CREATE_PR_ON_ISSUE: ${{ inputs.create_pr_on_issue }}
+        ISSUE_BRANCH_PREFIX: ${{ inputs.issue_branch_prefix }}
+        PR_TITLE_PREFIX: ${{ inputs.pr_title_prefix }}
+        PR_BODY_TEMPLATE: ${{ inputs.pr_body_template }}
+      with:
+        script: |
+          // NOTE:
+          // This script runs inside actions/github-script, so core.getInput() reads github-script's inputs, not this composite's inputs.
+          // Therefore, read composite inputs through process.env (wired via "env:" above).
+
+          const modeRaw = process.env.MODE;
+          const mode = String(modeRaw || '').trim().toLowerCase();
+          core.info(`modeRaw=${JSON.stringify(modeRaw)} mode=${mode}`);
+
+          const implWorkflowId = String(process.env.IMPL_WORKFLOW_ID || '').trim();
+
+          const skipPrefixes = String(process.env.SKIP_COMMIT_PREFIXES || '')
+            .split(',')
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean);
+
+          const allowFinalSync = String(process.env.ALLOW_FINAL_SYNC_DURING_IMPL || 'true').toLowerCase() === 'true';
+          const finalMarker = String(process.env.FINAL_SYNC_COMMIT_MARKER || '');
+
+          const allowedPerms = new Set(
+            String(process.env.ALLOWED_COMMENT_PERMISSIONS || 'admin,maintain,write')
+              .split(',')
+              .map(s => s.trim().toLowerCase())
+              .filter(Boolean)
+          );
+
+          const maxRuns = Math.min(Math.max(Number(process.env.MAX_WORKFLOW_RUNS_TO_SCAN || '50'), 1), 100);
+
+          const createPrOnIssue = String(process.env.CREATE_PR_ON_ISSUE || 'true').toLowerCase() === 'true';
+          const branchPrefix = String(process.env.ISSUE_BRANCH_PREFIX || 'claude/issue-');
+          const prTitlePrefix = String(process.env.PR_TITLE_PREFIX || 'Claude:');
+          const prBodyTemplate = String(process.env.PR_BODY_TEMPLATE || 'Created from issue #{{issue_number}}.');
+
+          function setOut(obj) {
+            core.setOutput('should_run', obj.should_run ? 'true' : 'false');
+            core.setOutput('reason', obj.reason || '');
+            core.setOutput('trigger_kind', obj.trigger_kind || 'none');
+            core.setOutput('issue_number', obj.issue_number ? String(obj.issue_number) : '');
+            core.setOutput('pr_number', obj.pr_number ? String(obj.pr_number) : '');
+            core.setOutput('head_sha', obj.head_sha || '');
+            core.setOutput('head_ref', obj.head_ref || '');
+            core.setOutput('comment_body', obj.comment_body || '');
+          }
+          const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
+          const ok = (extra = {}) => setOut({ should_run: true, reason: '', ...extra });
+
+          const ev = context.eventName;
+
+          // --- event: pull_request or issue_comment only in this design
+          if (ev !== 'pull_request' && ev !== 'issue_comment') {
+            return skip(`unsupported-event:${ev}`);
+          }
+
+          let issueNumber = '';
+          let prNumber = '';
+          let headSha = '';
+          let headRef = '';
+          let commentBody = '';
+          let triggerKind = 'none';
+          let isFork = false;
+
+          // -------- pull_request (review pr-sync)
+          if (ev === 'pull_request') {
+            issueNumber = String(context.payload.pull_request?.number || '');
+            prNumber = issueNumber;
+            triggerKind = 'pr-sync';
+
+            headSha = context.payload.pull_request?.head?.sha || '';
+            headRef = context.payload.pull_request?.head?.ref || '';
+            const fullName = context.payload.pull_request?.head?.repo?.full_name || '';
+            isFork = fullName !== `${context.repo.owner}/${context.repo.repo}`;
+
+            if (mode !== 'review') {
+              return skip('mode-mismatch:want-review', { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+            }
+
+            if (!headSha) return skip('no-head-sha', { issue_number: issueNumber, pr_number: prNumber, trigger_kind: triggerKind });
+            if (isFork) return skip('fork-pr-skip', { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+
+            // implement-running gate for review
+            let implementing = false;
+            try {
+              const runsResp = await github.rest.actions.listWorkflowRunsForWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: implWorkflowId,
+                per_page: maxRuns,
+              });
+              const runs = runsResp.data?.workflow_runs || [];
+              const key = `pr #${prNumber}`.toLowerCase();
+              implementing = runs.some(r => {
+                if (!['queued', 'in_progress'].includes(r.status)) return false;
+                const prs = r.pull_requests || [];
+                if (prs.some(p => String(p.number) === prNumber)) return true;
+                const title = String(r.display_title || '').toLowerCase();
+                if (title.includes(key)) return true;
+                if (headRef && String(r.head_branch || '') === headRef) return true;
+                if (headSha && String(r.head_sha || '') === headSha) return true;
+                return false;
+              });
+            } catch (_) {
+              implementing = false;
+            }
+
+            // pr-sync filters
+            if (context.payload.action === 'synchronize') {
+              const before = context.payload.before;
+              const after = context.payload.after;
+              if (before && after) {
+                try {
+                  const cmp = await github.rest.repos.compareCommits({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    base: before,
+                    head: after,
+                  });
+                  const status = String(cmp.data?.status || '').toLowerCase();
+                  const isNormal = (status === 'ahead' || status === 'identical');
+                  if (!isNormal) {
+                    return skip(`force-push:${status}`, { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+                  }
+                } catch (_) {
+                  return skip('force-push:compare-failed', { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+                }
+              }
+            }
+
+            let headCommitMsg = '';
+            try {
+              const commitResp = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: headSha,
+              });
+              headCommitMsg = String(commitResp.data?.commit?.message || '');
+              const msgLower = headCommitMsg.toLowerCase();
+              if (skipPrefixes.some(p => msgLower.startsWith(p))) {
+                return skip(`skip-commit-prefix:${msgLower.split('\n')[0]}`, { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+              }
+            } catch (_) {
+              headCommitMsg = '';
+            }
+
+            // implementing gate w/ exception
+            if (implementing) {
+              const isSync = context.payload.action === 'synchronize';
+              const senderType = String(context.payload.sender?.type || '');
+              const markerOk = finalMarker && headCommitMsg && headCommitMsg.includes(finalMarker);
+              const allow = allowFinalSync && isSync && (senderType === 'Bot' || markerOk);
+              if (!allow) {
+                return skip('implement-running', { issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
+              }
+            }
+
+            return ok({ issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: '', trigger_kind: triggerKind });
+          }
+
+          // -------- issue_comment (issue or PR conversation)
+          issueNumber = String(context.payload.issue?.number || '');
+          commentBody = context.payload.comment?.body || '';
+          const commentUserType = context.payload.comment?.user?.type || '';
+
+          if (!issueNumber) return skip('no-issue-number');
+
+          // bot comment skip
+          if (String(commentUserType).toLowerCase() === 'bot') {
+            return skip('bot-comment', { issue_number: issueNumber, comment_body: commentBody });
+          }
+
+          // normalize @ to avoid full-width
+          const normalized = (commentBody || '').replaceAll('＠', '@').toLowerCase();
+          const hasClaude = normalized.includes('@claude');
+          const hasReview = normalized.includes('[review]');
+
+          if (!hasClaude) {
+            return skip('no-@claude', { issue_number: issueNumber, comment_body: commentBody });
+          }
+
+          // classify
+          if (hasReview) {
+            triggerKind = 'comment-review';
+            if (mode !== 'review') return skip('mode-mismatch:want-review', { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          } else {
+            triggerKind = 'comment-implement';
+            if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // auth check (comment triggers)
+          const permResp = await github.rest.repos.getCollaboratorPermissionLevel({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            username: context.actor,
+          });
+          const perm = String(permResp.data?.permission || '').toLowerCase();
+          if (!allowedPerms.has(perm)) {
+            return skip(`unauthorized:${perm}`, { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          const isPrConversation = !!context.payload.issue?.pull_request;
+
+          // --- review via comment requires PR context
+          if (mode === 'review' && !isPrConversation) {
+            return skip('comment-review-on-issue-not-supported', { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // --- implement: if PR conversation, target that PR; else issue-based flow
+          if (isPrConversation) {
+            // issue is PR conversation -> fetch PR for head info
+            prNumber = issueNumber;
+            try {
+              const prResp = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: Number(prNumber),
+              });
+              const pr = prResp.data;
+              headSha = pr.head?.sha || '';
+              headRef = pr.head?.ref || '';
+              const fullName = pr.head?.repo?.full_name || '';
+              isFork = fullName !== `${context.repo.owner}/${context.repo.repo}`;
+              if (isFork) return skip('fork-pr-skip', { issue_number: issueNumber, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
+            } catch (e) {
+              return skip(`failed-get-pr:${e.message}`, { issue_number: issueNumber, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
+            }
+            if (!headRef) return skip('no-head-ref', { issue_number: issueNumber, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
+            return ok({ issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // --- issue-based implement: find existing PR or create one
+          if (mode !== 'implement') {
+             return skip(`mode-mismatch:want-implement:got-${mode}`, { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // 1) load issue info
+          let issue;
+          try {
+            const issueResp = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(issueNumber),
+            });
+            issue = issueResp.data;
+          } catch (e) {
+            return skip(`failed-get-issue:${e.message}`, { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // 2) search PRs referencing this issue ("#123") and open
+          let foundPr = null;
+          try {
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open ${issueNumber}`;
+            const search = await github.rest.search.issuesAndPullRequests({ q, per_page: 20 });
+            const items = search.data?.items || [];
+            for (const it of items) {
+              if (!it.pull_request) continue;
+              const n = it.number;
+              const prResp = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: n,
+              });
+              const pr = prResp.data;
+              const text = `${pr.title || ''}\n${pr.body || ''}`.toLowerCase();
+              if (text.includes(`#${issueNumber}`)) {
+                foundPr = pr;
+                break;
+              }
+              if (!foundPr) foundPr = pr;
+            }
+          } catch (_) {}
+
+          if (foundPr) {
+            prNumber = String(foundPr.number);
+            headSha = foundPr.head?.sha || '';
+            headRef = foundPr.head?.ref || '';
+            return ok({ issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          if (!createPrOnIssue) {
+            return skip('no-existing-pr-and-create-disabled', { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+
+          // 3) create branch from default branch
+          let defaultBranch = '';
+          let baseSha = '';
+          try {
+            const repoResp = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            defaultBranch = repoResp.data?.default_branch || 'main';
+
+            const refResp = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${defaultBranch}`,
+            });
+            baseSha = refResp.data?.object?.sha || '';
+          } catch (e) {
+            return skip(`failed-get-default-branch:${e.message}`, { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }
+          if (!baseSha) return skip('failed-resolve-base-sha', { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+
+          const newBranch = `${branchPrefix}${issueNumber}`;
+
+          // create ref (ignore if exists)
+          try {
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/heads/${newBranch}`,
+              sha: baseSha,
+            });
+          } catch (e) {
+            // already exists => OK
+          }
+
+          // 4) create PR
+          try {
+            const title = `${prTitlePrefix} ${issue.title || `Issue #${issueNumber}`}`;
+            const body = prBodyTemplate.replaceAll('{{issue_number}}', String(issueNumber));
+
+            const prResp = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              head: newBranch,
+              base: defaultBranch,
+              body,
+              draft: false,
+            });
+
+            const pr = prResp.data;
+            prNumber = String(pr.number);
+            headSha = pr.head?.sha || baseSha;
+            headRef = pr.head?.ref || newBranch;
+
+            // Optionally comment back to issue with PR link (nice UX)
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(issueNumber),
+                body: `Created PR #${prNumber} for this issue.`,
+              });
+            } catch (_) {}
+
+            return ok({ issue_number: issueNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
+          } catch (e) {
+            return skip(`failed-create-pr:${e.message}`, { issue_number: issueNumber, comment_body: commentBody, trigger_kind: triggerKind });
+          }

@@ -40,9 +40,15 @@ your-project/
 │   └── rules/
 │       ├── 00_scope.md, 10_workflow.md, 20_quality.md, ...
 ├── .github/
+│   ├── actions/
+│   │   ├── prepare-claude-context/ # イベントを解析し、実行を制御する
+│   │   ├── run-claude/             # 実装タスクを実行する
+│   │   ├── run-claude-review/      # レビュータスクを実行する
+│   │   └── cancel-claude-runs/     # 既存のワークフロー実行をキャンセルする
 │   ├── workflows/
-│   │   ├── claude.yml          # PRの自動レビューとIssueコメントでのタスク実行を処理する統合ワークフロー
-│   │   └── sync_templates.yml  # .claude/ ディレクトリを更新するWF
+│   │   ├── claude.yml              # @claude コメントによる実装タスクを実行するWF
+│   │   ├── claude-review.yml       # PRの自動レビューを実行するWF
+│   │   └── sync_templates.yml      # .claude/ ディレクトリを更新するWF
 │   ├── pull_request_template.md
 │   └── ISSUE_TEMPLATE/
 │       └── agent_task.md
@@ -53,7 +59,7 @@ your-project/
 │   └── agent/
 │       ├── TASK.md
 │       └── PR.md
-└── CLAUDE.md                 # Claudeの基本的な使い方ガイド
+└── CLAUDE.md
 ```
 ---
 
@@ -72,45 +78,41 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ### 2. ワークフローのカスタマイズ
 
-プロジェクトの技術スタックに合わせて、`claude.yml` を編集します。インストールスクリプトによって、PRレビューとタスク実行を自動で分岐し、重複実行を防止するロジックが組み込まれたワークフローが生成されます。
+`claude.yml` は、Claude にコード生成や修正を指示するためのワークフローです。プロジェクトの技術スタックに合わせて、このファイルの環境設定部分を編集する必要があります。
 
-以下は、`task` ジョブの環境設定部分のサンプルです。主に `steps` の環境設定部分や `allowed_tools` をプロジェクトに合わせて変更してください。
+例えば、Node.js プロジェクトの場合、`npm install` を実行するステップを追加します。
 
-#### `.github/workflows/claude.yml` の `task` ジョブのサンプル
+#### `.github/workflows/claude.yml` のカスタマイズ例
 
 ```yaml
-# ... (on, permissions, concurrency, prepareジョブは省略) ...
-
-  task:
-    needs: prepare
-    if: needs.prepare.outputs.run_type == 'task'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Prepare Claude Run
-        id: prepare
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
-
-      - name: Checkout repository
-        if: steps.prepare.outputs.should_run == 'true'
+# ...
+      - name: Checkout code
+        if: steps.prep.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.prepare.outputs.head_sha }}
+          ref: ${{ steps.prep.outputs.head_sha }} # Falls back to default branch if head_sha is empty
           fetch-depth: 0
 
-      # 3. プロジェクトの環境設定 (例: Node.js)
+      # --- ▼ プロジェクトの環境設定をここに追加 ▼ ---
       - name: Set up Node.js
+        if: steps.prep.outputs.should_run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+      
       - name: Install dependencies
+        if: steps.prep.outputs.should_run == 'true'
         run: npm install
+      # --- ▲ プロジェクトの環境設定をここに追加 ▲ ---
 
       - name: Run Claude
-        if: steps.prepare.outputs.should_run == 'true'
+        if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          comment_body: ${{ github.event.comment.body || github.event.pull_request.body || '' }}
+          issue_number: ${{ steps.prep.outputs.issue_number }}
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
           # allowed_tools: |
@@ -122,46 +124,62 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ## Composite Actions の詳細
 
-`claude-starter` は、ワークフローのロジックをカプセル化するために、いくつかの Composite Actions を提供します。これらを直接利用することで、より柔軟なワークフローを構築することも可能です。
+`claude-starter` は、ワークフローのロジックをカプセル化するために、いくつかの Composite Actions を提供します。
 
-### `prepare-claude-run`
+### `prepare-claude-context`
 
-**役割**: Claude の実行を準備し、実行すべきジョブの種類（`review` または `task`）を判断します。また、権限チェックや不要な実行のスキップも行います。
+**役割**: ワークフローの"頭脳"です。GitHub のイベントを解析し、実行すべきタスク（実装 or レビュー or スキップ）を判断します。また、実行権限のチェック、PR情報の取得、重複実行の防止など、実行前の準備をすべて担当します。
 
-| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
-|---|---|:---:|---|
-| `run_type` | 実行タイプを指定します。`review` または `task`。 | | `task` |
-| `github_event_before` | `synchronize` イベントの `before` のSHA。フォースプッシュ検知に使います。 | | |
-| `github_event_after` | `synchronize` イベントの `after` のSHA。フォースプッシュ検知に使います。 | | |
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `mode` | `implement` または `review` を指定し、ワークフローの目的を伝えます。 |
+| `impl_workflow_id` | 実装ワークフローのファイル名（例: `claude-impl.yml`）。レビュー中に実装が実行されていないか確認するために使います。 |
+| `skip_commit_prefixes` | レビューをスキップするコミットメッセージの接頭辞（例: `docs:,wip:`）。 |
+| `allowed_comment_permissions` | コメントでの実行を許可するユーザー権限（例: `admin,write`）。 |
 
 | 出力 (`outputs`) | 説明 |
 |---|---|
-| `head_sha` | 実行対象となる Pull Request の HEAD コミットの SHA。`actions/checkout` の `ref` に渡すために使います。 |
-| `should_run` | ワークフローを続行すべきかどうかを示す真偽値。 |
+| `should_run` | ワークフローを続行すべきか (`true`/`false`)。 |
+| `issue_number` | ワークフローをトリガーした Issue または PR の番号。 |
+| `pr_number` | 実行対象となるPRの番号（PRでない場合は空）。 |
+| `head_sha`, `head_ref` | 実行対象となるPRのブランチ情報（PRでない場合は空）。 |
+| `comment_body` | トリガーとなったコメントの本文。 |
+
 
 ### `run-claude`
 
-**役割**: Issue コメントを解析し、`anthropics/claude-code-action` を適切なパラメータで実行します（タスク実行用）。
+**役割**: 実装タスクを実行します。Issue コメントからモデル指定（`[opus]`など）やターン数（`[turns=...]`など）を解析し、`anthropics/claude-code-action` を適切なパラメータで実行します。
 
-| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
-|---|---|:---:|---|
-| `comment_body` | トリガーとなったコメントの本文。 | ✅ | |
-| `claude_code_oauth_token` | Claude Code の OAuth トークン。 | ✅ | |
-| `default_model` | デフォルトで使用するモデル。 | | `sonnet` |
-| `default_max_turns` | デフォルトの最大ターン数。 | | `10` |
-| `allowed_tools` | Claude に許可する追加のツール（改行区切り）。 | | (空) |
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `issue_number` | ワークフローをトリガーした Issue または PR の番号。 |
+| `pr_number` | 実行対象となるPRの番号（新規PR作成の場合は空）。 |
+| `comment_body` | トリガーとなったコメントの本文。 |
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 |
+| `allowed_tools` | Claude に許可する追加のツール（改行区切り）。 |
+
 
 ### `run-claude-review`
 
-**役割**: Pull Request の自動レビューを実行します。
+**役割**: Pull Request の自動レビューを実行します。`anthropics/claude-code-action` をレビュー用の設定で実行します。
 
-| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
-|---|---|:---:|---|
-| `claude_code_oauth_token` | Claude Code の OAuth トークン。 | ✅ | |
-| `model` | レビューに使用するモデル。 | | `haiku` |
-| `max_turns` | 最大ターン数。 | | `25` |
-| `prompt` | レビューを依頼する際のプロンプト。 | | `/review` |
-| `allowed_bots` | 応答を許可するボット名。 | | `claude[bot]` |
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `issue_number` | ワークフローをトリガーした Issue または PR の番号。 |
+| `pr_number` | レビュー対象のPR番号。 |
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 |
+| `model` | レビューに使用するモデル (`haiku`, `sonnet`, `opus`)。 |
+| `prompt` | レビューを依頼する際のプロンプト（デフォルト: `/review`）。 |
+
+
+### `cancel-claude-runs`
+
+**役割**: 指定されたワークフローの実行をキャンセルします。主に、実装タスク(`claude.yml`)が開始されたときに、進行中のレビュータスク(`claude-review.yml`)を停止するために使用されます。
+
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `workflow_id` | キャンセル対象のワークフローのファイル名（例: `claude-review.yml`）。 |
+| `pr_number` | 対象となる Pull Request の番号。 |
 
 ---
 
@@ -174,20 +192,21 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 `claude-starter` リポジトリから、以下のディレクトリとファイルをあなたのプロジェクトにコピーします。
 
 -   `.claude/` (ディレクトリ全体)
--   `.github/actions/` (ディレクトリ全体。`prepare-claude-run`, `run-claude`, `run-claude-review` を含みます)
--   `.github/workflows/claude.yml`
+-   `.github/actions/` (ディレクトリ全体)
+-   `examples/.github/workflows/claude.yml.template` を `.github/workflows/claude.yml` としてコピー
+-   `examples/.github/workflows/claude-review.yml.template` を `.github/workflows/claude-review.yml` としてコピー
 
 ### 2. ワークフローを調整する
 
-コピーした `.github/workflows/claude.yml` を開き、`uses:` のパスを調整します。
+コピーした `.github/workflows/claude.yml` と `claude-review.yml` を開き、`uses:` のパスを調整します。
 
-`claude-starter` リポジトリを直接参照するのではなく、あなたのリポジトリ内にコピーしたローカルのアクションを参照するように変更します。
+`@@REF@@` の部分を、使用したい `claude-starter` のブランチ名やタグ（例: `@master`）に置き換えるか、ローカルのアクションを参照するように変更します。
 
 **変更前:**
-`uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master`
+`uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@`
 
-**変更後:**
-`uses: ./.github/actions/prepare-claude-run`
+**変更後 (ローカル参照):**
+`uses: ./.github/actions/prepare-claude-context`
 
 ### 3. 必須設定を行う
 

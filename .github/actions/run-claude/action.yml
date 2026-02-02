@@ -1,28 +1,28 @@
-name: 'Run Claude'
-description: 'Resolves options, builds tools, and runs the Claude Code Action'
+name: "Run Claude"
+description: "Resolves options, builds tools, and runs the Claude Code Action"
 
 inputs:
   github_token:
-    description: 'GitHub token'
+    description: "GitHub token"
     required: false
   comment_body:
-    description: 'The body of the comment that triggered the workflow'
+    description: "The body of the comment that triggered the workflow"
     required: true
   claude_code_oauth_token:
-    description: 'Claude Code OAuth Token'
+    description: "Claude Code OAuth Token"
     required: true
   default_model:
-    description: 'Default Claude model'
+    description: "Default Claude model"
     required: false
-    default: 'sonnet'
+    default: "sonnet"
   default_max_turns:
-    description: 'Default max turns'
+    description: "Default max turns"
     required: false
-    default: '100'
+    default: "100"
   allowed_tools:
-    description: 'Additional allowed tools (newline-separated)'
+    description: "Additional allowed tools (newline-separated)"
     required: false
-    default: ''
+    default: ""
 
 runs:
   using: "composite"
@@ -30,8 +30,10 @@ runs:
     - name: Check trigger condition
       id: trigger
       shell: bash
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
       run: |
-        if [[ "${{ inputs.comment_body }}" =~ "@claude" ]]; then
+        if [[ "$COMMENT_BODY" =~ "@claude" ]]; then
           echo "triggered=true" >> $GITHUB_OUTPUT
         else
           echo "Comment does not contain '@claude'. Skipping."
@@ -42,19 +44,19 @@ runs:
       if: steps.trigger.outputs.triggered == 'true'
       id: opts
       uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
       with:
         script: |
-          const body = `${{ inputs.comment_body }}`;
+          const body = process.env.COMMENT_BODY || "";
 
-          // モデル解析
           const model =
-            body.includes("[sonnet]")  ? "sonnet" :
-            body.includes("[opus]")  ? "opus" :
-            body.includes("[haiku]") ? "haiku" : "${{ inputs.default_model }}";
+            body.includes("[sonnet]") ? "sonnet" :
+            body.includes("[opus]")   ? "opus"   :
+            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.default_model }}";
 
-          // ターン数解析
           const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-          const maxTurns = m ? Number(m[1]) : ${{ inputs.default_max_turns }};
+          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.default_max_turns }}");
 
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
@@ -63,9 +65,10 @@ runs:
       if: steps.trigger.outputs.triggered == 'true'
       id: tools
       shell: bash
+      env:
+        CUSTOM_TOOLS: ${{ inputs.allowed_tools }}
       run: |
         TOOLS=""
-        CUSTOM_TOOLS="${{ inputs.allowed_tools }}"
         if [ -n "$CUSTOM_TOOLS" ]; then
           while IFS= read -r tool; do
             [ -n "$tool" ] && TOOLS="$TOOLS --allowedTools \"$tool\""
@@ -83,6 +86,7 @@ runs:
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}
           ${{ steps.tools.outputs.tools }}
+
     - name: Run Claude Code Action (App mode)
       if: steps.trigger.outputs.triggered == 'true' && (inputs.github_token == '' || inputs.github_token == null)
       uses: anthropics/claude-code-action@v1

@@ -21,12 +21,9 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository to access local actions
-        uses: actions/checkout@v4
-
       - name: Prepare context
         id: prep
-        uses: ./.github/actions/prepare-claude-context
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
         with:
           mode: review
           impl_workflow_id: claude-impl.yml
@@ -44,6 +41,6 @@ jobs:
 
       - name: Run Claude Review
         if: steps.prep.outputs.should_run == 'true'
-        uses: ./.github/actions/run-claude-review
+        uses: Javakky/claude-starter/.github/actions/run-claude-review@@REF@@
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

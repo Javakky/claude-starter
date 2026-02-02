@@ -280,9 +280,10 @@ declare -a CLAUDE_FILES=(
 
 # 新しく追加: Composite Actions のファイルリスト
 declare -a ACTION_FILES=(
-    ".github/actions/prepare-claude-run/action.yml"
+    ".github/actions/prepare-claude-context/action.yml"
     ".github/actions/run-claude/action.yml"
     ".github/actions/run-claude-review/action.yml"
+    ".github/actions/cancel-claude-runs/action.yml"
 )
 
 declare -a WORKFLOW_FILES=(
@@ -335,6 +336,7 @@ create_workflow_files() {
     local ref_for_workflow
     ref_for_workflow=$(get_ref_for_workflow)
 
+    # claude.yml (implement)
     local claude_yml_url
     claude_yml_url=$(get_raw_url "examples/.github/workflows/claude.yml.template")
     local claude_yml_dest="${TARGET_DIR}/.github/workflows/claude.yml"
@@ -343,6 +345,17 @@ create_workflow_files() {
         warn "Skipping (already exists): $claude_yml_dest"
     else
         download_and_replace "$claude_yml_url" "$claude_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
+
+    # claude-review.yml
+    local review_yml_url
+    review_yml_url=$(get_raw_url "examples/.github/workflows/claude-review.yml.template")
+    local review_yml_dest="${TARGET_DIR}/.github/workflows/claude-review.yml"
+
+    if [[ -e "$review_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $review_yml_dest"
+    else
+        download_and_replace "$review_yml_url" "$review_yml_dest" "@@REF@@" "$ref_for_workflow"
     fi
 }
 
