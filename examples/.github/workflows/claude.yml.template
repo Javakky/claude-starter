@@ -10,19 +10,27 @@ permissions:
   contents: write
   pull-requests: write # PR情報を読み取るために必要
   issues: write
-  actions: write # 実行中のワークフローをキャンセルするために必要
+  # 'actions: write' is removed as we now use the 'concurrency' feature.
+
+concurrency:
+  # Group workflows by PR number to avoid race conditions and cancel older runs.
+  # Fallback to run_id to ensure the group is never empty.
+  group: claude-code-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   claude:
     runs-on: ubuntu-latest
-    # `@claude` を含み、かつ `[review]` を含まないコメントでのみ実行
-    if: contains(github.event.comment.body, '@claude') && !contains(github.event.comment.body, '[review]')
+    # Run for comments on issues that are PRs, or for review comments on PRs.
+    if: (github.event_name == 'issue_comment' && github.event.issue.pull_request) || github.event_name == 'pull_request_review_comment'
     steps:
       - name: Prepare Claude Run
         id: prepare
         uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
+        # No inputs needed for 'task' run type, it uses the context directly.
 
       - name: Checkout repository
+        if: steps.prepare.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.prepare.outputs.head_sha }}
@@ -41,9 +49,10 @@ jobs:
       # ------------------------------------
 
       - name: Run Claude
+        if: steps.prepare.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          comment_body: ${{ github.event.comment.body }}
+          comment_body: ${{ github.event.comment.body || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
           # default_model: 'opus'

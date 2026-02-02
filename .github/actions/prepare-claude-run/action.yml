@@ -1,77 +1,145 @@
 name: 'Prepare Claude Run'
-description: 'Gets PR info and cancels conflicting workflow runs to ensure the latest instruction is executed.'
+description: 'Checks if the workflow should run and gets PR info.'
+
+inputs:
+  run_type:
+    description: "The type of run, e.g., 'review' or 'task'."
+    required: false
+    default: 'task'
+  github_event_before:
+    description: 'The SHA of the commit before the push (from synchronize event)'
+    required: false
+  github_event_after:
+    description: 'The SHA of the commit after the push (from synchronize event)'
+    required: false
 
 outputs:
   head_sha:
     description: 'The SHA of the PR head commit.'
     value: ${{ steps.prepare.outputs.head_sha }}
+  should_run:
+    description: 'True if the workflow should proceed.'
+    value: ${{ steps.prepare.outputs.should_run }}
 
 runs:
   using: "composite"
   steps:
-    - name: Get PR info and handle conflicts
+    - name: Check for force push
+      id: force_push_check
+      if: inputs.run_type == 'review' && github.event_name == 'pull_request' && github.event.action == 'synchronize'
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.github_event_before }}" ] || [ -z "${{ inputs.github_event_after }}" ]; then
+          echo "is_force_push=false" >> $GITHUB_OUTPUT
+        elif git merge-base --is-ancestor "${{ inputs.github_event_before }}" "${{ inputs.github_event_after }}" >/dev/null 2>&1; then
+          echo "is_force_push=false" >> $GITHUB_OUTPUT
+        else
+          echo "is_force_push=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Decide execution and get PR info
       id: prepare
       uses: actions/github-script@v7
-      env:
-        CURRENT_RUN_ID: ${{ github.run_id }}
       with:
         script: |
+          const runType = '${{ inputs.run_type }}';
+          const isForcePush = '${{ steps.force_push_check.outputs.is_force_push || 'false' }}' === 'true';
+
+          let shouldRun = true;
           let headSha = '';
-          let headRef = '';
+          let prNumber;
 
+          // 1. Determine PR Number from context
           if (context.eventName === 'pull_request') {
-            headSha = context.payload.pull_request.head.sha;
-            headRef = context.payload.pull_request.head.ref;
-          } else if (context.payload.issue && context.payload.issue.pull_request) {
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            headSha = pr.head.sha;
-            headRef = pr.head.ref;
-          } else {
-            core.info('Not a PR-related event. Skipping conflict check.');
-            core.setOutput('head_sha', '');
-            return;
+              prNumber = context.payload.pull_request.number;
+          } else if (context.eventName === 'issue_comment') {
+              prNumber = context.payload.issue.pull_request ? context.payload.issue.number : undefined;
+          } else if (context.eventName === 'pull_request_review_comment') {
+              prNumber = context.payload.pull_request.number;
           }
 
-          core.setOutput('head_sha', headSha);
-
-          if (!headRef) {
-            core.info('Could not determine branch. Skipping conflict check.');
-            return;
-          }
-
-          const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            branch: headRef,
-            status: 'in_progress'
-          });
-
-          const conflictingRuns = runs.workflow_runs.filter(run => {
-            // 自分自身の実行は除外
-            if (run.id === parseInt(process.env.CURRENT_RUN_ID)) {
-              return false;
-            }
-            // 実行中の 'Claude Code' または 'Claude Review' ワークフローをチェック
-            return run.name === 'Claude Code' || run.name === 'Claude Review';
-          });
-
-          if (conflictingRuns.length > 0) {
-            core.warning(`Found ${conflictingRuns.length} conflicting runs. Cancelling them...`);
-            for (const run of conflictingRuns) {
-              core.warning(`- Cancelling run #${run.id} (${run.name})`);
-              try {
-                await github.rest.actions.cancelWorkflowRun({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: run.id
-                });
-              } catch (error) {
-                core.error(`Failed to cancel run #${run.id}: ${error.message}`);
+          // 2. Authorization & Pre-checks
+          if (context.eventName.includes('comment')) {
+              if (!prNumber) {
+                  core.info('Comment is not on a pull request. Skipping.');
+                  shouldRun = false;
+              } else {
+                  const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      username: context.actor,
+                  });
+                  const allowed = ['admin', 'maintain', 'write'];
+                  if (!allowed.includes(permission.permission)) {
+                      core.info(`User '${context.actor}' with permission '${permission.permission}' is not authorized. Skipping.`);
+                      shouldRun = false;
+                  }
               }
-            }
-            core.info("Proceeding with this run as it contains the latest instructions.");
           }
+
+          if (shouldRun && context.eventName === 'pull_request') {
+              if (context.payload.pull_request.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+                  core.info('Pull request is from a fork. Skipping.');
+                  shouldRun = false;
+              }
+          }
+
+          // 3. Main Execution Logic
+          if (shouldRun) {
+              const commentBody = (context.payload.comment?.body || '').trim();
+              const isReviewComment = /@claude\s*\[review\]/.test(commentBody);
+              const isTaskComment = /@claude/.test(commentBody);
+
+              if (runType === 'review') {
+                  if (context.eventName === 'pull_request') {
+                      if (isForcePush) {
+                          core.info('Force push detected. Skipping review.');
+                          shouldRun = false;
+                      }
+                      const prTitle = (context.payload.pull_request.title || '').toLowerCase();
+                      const skipPrefixes = ['docs:', 'style:', 'chore:', 'wip:'];
+                      if (shouldRun && skipPrefixes.some(p => prTitle.startsWith(p))) {
+                          core.info(`Skipping review due to PR title prefix: ${prTitle}`);
+                          shouldRun = false;
+                      }
+                  } else if (context.eventName === 'issue_comment') {
+                      if (!isReviewComment) {
+                          shouldRun = false;
+                      }
+                  } else {
+                      shouldRun = false;
+                  }
+              } else { // runType === 'task'
+                  if (context.eventName.includes('comment')) {
+                      if (!isTaskComment || isReviewComment) {
+                          shouldRun = false;
+                      }
+                  } else {
+                      shouldRun = false;
+                  }
+              }
+          }
+
+          // 4. Get Head SHA
+          if (shouldRun) {
+              if (context.eventName === 'pull_request') {
+                  headSha = context.payload.pull_request.head.sha;
+              } else if (prNumber) {
+                  try {
+                      const { data: pr } = await github.rest.pulls.get({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          pull_number: prNumber,
+                      });
+                      headSha = pr.head.sha;
+                  } catch (error) {
+                      core.error(`Failed to get PR info: ${error.message}`);
+                      shouldRun = false;
+                  }
+              } else {
+                  shouldRun = false;
+              }
+          }
+
+          core.setOutput('should_run', shouldRun);
+          core.setOutput('head_sha', headSha);
