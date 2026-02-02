@@ -1,28 +1,58 @@
-name: Claude Code
+name: Claude
 
 on:
+  pull_request:
+    types: [opened, synchronize]
   issue_comment:
     types: [created]
   pull_request_review_comment:
-    types: [ created ]
+    types: [created]
 
 permissions:
   contents: write
-  pull-requests: write # PR情報を読み取るために必要
+  pull-requests: write
   issues: write
-  # 'actions: write' is removed as we now use the 'concurrency' feature.
+  actions: write
+  id-token: write
 
 concurrency:
-  # Group workflows by PR number to avoid race conditions and cancel older runs.
-  # Fallback to run_id to ensure the group is never empty.
-  group: claude-code-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: claude-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}-${{ github.event.sender.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
 
 jobs:
-  claude:
+  prepare:
+    if: github.event_name == 'pull_request' || github.actor != 'claude'
     runs-on: ubuntu-latest
-    # Run for comments on issues that are PRs, or for review comments on PRs.
-    if: (github.event_name == 'issue_comment' && github.event.issue.pull_request) || github.event_name == 'pull_request_review_comment'
+    outputs:
+      run_type: ${{ steps.detect.outputs.run_type }}
+    steps:
+      - id: detect
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          body="$COMMENT_BODY"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "run_type=review" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$body" != *"@claude"* ]]; then
+            echo "run_type=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$body" == *"[review]"* ]]; then
+            echo "run_type=review" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_type=task" >> "$GITHUB_OUTPUT"
+          fi
+
+  task:
+    needs: prepare
+    if: needs.prepare.outputs.run_type == 'task'
+    runs-on: ubuntu-latest
     steps:
       - name: Prepare Claude Run
         id: prepare
@@ -52,7 +82,7 @@ jobs:
         if: steps.prepare.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          comment_body: ${{ github.event.comment.body || '' }}
+          comment_body: ${{ github.event.comment.body || github.event.pull_request.body || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
           # default_model: 'opus'
@@ -60,3 +90,36 @@ jobs:
           # allowed_tools: |
           #   Bash(npm run lint)
           #   Bash(npm run test)
+
+  review:
+    needs: prepare
+    if: needs.prepare.outputs.run_type == 'review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout for history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Claude Run
+        id: prepare
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
+        with:
+          run_type: 'review'
+          github_event_before: ${{ github.event.before }}
+          github_event_after: ${{ github.event.after }}
+
+      - name: Checkout PR head
+        if: steps.prepare.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.prepare.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Run Claude Review
+        if: steps.prepare.outputs.should_run == 'true'
+        uses: Javakky/claude-starter/.github/actions/run-claude-review@@REF@@
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 必要に応じてデフォルト値をオーバーライド
+          # model: 'opus'

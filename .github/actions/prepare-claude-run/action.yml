@@ -59,64 +59,38 @@ runs:
           }
 
           // 2. Authorization & Pre-checks
-          if (context.eventName.includes('comment')) {
-              if (!prNumber) {
-                  core.info('Comment is not on a pull request. Skipping.');
-                  shouldRun = false;
-              } else {
-                  const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      username: context.actor,
-                  });
-                  const allowed = ['admin', 'maintain', 'write'];
-                  if (!allowed.includes(permission.permission)) {
-                      core.info(`User '${context.actor}' with permission '${permission.permission}' is not authorized. Skipping.`);
-                      shouldRun = false;
-                  }
-              }
-          }
-
-          if (shouldRun && context.eventName === 'pull_request') {
-              if (context.payload.pull_request.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
-                  core.info('Pull request is from a fork. Skipping.');
+          if (!prNumber) {
+              core.info('Not a pull request context. Skipping.');
+              shouldRun = false;
+          } else if (context.eventName.includes('comment')) {
+              const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: context.actor,
+              });
+              const allowed = ['admin', 'maintain', 'write'];
+              if (!allowed.includes(permission.permission)) {
+                  core.info(`User '${context.actor}' with permission '${permission.permission}' is not authorized. Skipping.`);
                   shouldRun = false;
               }
           }
 
-          // 3. Main Execution Logic
-          if (shouldRun) {
-              const commentBody = (context.payload.comment?.body || '').trim();
-              const isReviewComment = /@claude\s*\[review\]/.test(commentBody);
-              const isTaskComment = /@claude/.test(commentBody);
+          if (shouldRun && context.eventName === 'pull_request' && context.payload.pull_request.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.info('Pull request is from a fork. Skipping.');
+              shouldRun = false;
+          }
 
-              if (runType === 'review') {
-                  if (context.eventName === 'pull_request') {
-                      if (isForcePush) {
-                          core.info('Force push detected. Skipping review.');
-                          shouldRun = false;
-                      }
-                      const prTitle = (context.payload.pull_request.title || '').toLowerCase();
-                      const skipPrefixes = ['docs:', 'style:', 'chore:', 'wip:'];
-                      if (shouldRun && skipPrefixes.some(p => prTitle.startsWith(p))) {
-                          core.info(`Skipping review due to PR title prefix: ${prTitle}`);
-                          shouldRun = false;
-                      }
-                  } else if (context.eventName === 'issue_comment') {
-                      if (!isReviewComment) {
-                          shouldRun = false;
-                      }
-                  } else {
-                      shouldRun = false;
-                  }
-              } else { // runType === 'task'
-                  if (context.eventName.includes('comment')) {
-                      if (!isTaskComment || isReviewComment) {
-                          shouldRun = false;
-                      }
-                  } else {
-                      shouldRun = false;
-                  }
+          // 3. Additional review-specific checks
+          if (shouldRun && runType === 'review') {
+              if (isForcePush) {
+                  core.info('Force push detected. Skipping review.');
+                  shouldRun = false;
+              }
+              const prTitle = (context.payload.pull_request?.title || '').toLowerCase();
+              const skipPrefixes = ['docs:', 'style:', 'chore:', 'wip:'];
+              if (shouldRun && skipPrefixes.some(p => prTitle.startsWith(p))) {
+                  core.info(`Skipping review due to PR title prefix: ${prTitle}`);
+                  shouldRun = false;
               }
           }
 
@@ -124,7 +98,7 @@ runs:
           if (shouldRun) {
               if (context.eventName === 'pull_request') {
                   headSha = context.payload.pull_request.head.sha;
-              } else if (prNumber) {
+              } else { // Comments
                   try {
                       const { data: pr } = await github.rest.pulls.get({
                           owner: context.repo.owner,
@@ -136,8 +110,6 @@ runs:
                       core.error(`Failed to get PR info: ${error.message}`);
                       shouldRun = false;
                   }
-              } else {
-                  shouldRun = false;
               }
           }
 

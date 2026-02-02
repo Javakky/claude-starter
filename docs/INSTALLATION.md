@@ -41,8 +41,7 @@ your-project/
 │       ├── 00_scope.md, 10_workflow.md, 20_quality.md, ...
 ├── .github/
 │   ├── workflows/
-│   │   ├── claude.yml          # IssueコメントでClaudeを呼び出すWF
-│   │   ├── claude_review.yml   # PRを自動レビューするWF
+│   │   ├── claude.yml          # PRの自動レビューとIssueコメントでのタスク実行を処理する統合ワークフロー
 │   │   └── sync_templates.yml  # .claude/ ディレクトリを更新するWF
 │   ├── pull_request_template.md
 │   └── ISSUE_TEMPLATE/
@@ -73,38 +72,26 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ### 2. ワークフローのカスタマイズ
 
-プロジェクトの技術スタックに合わせて、`claude.yml` を編集します。インストールスクリプトによって、ユーザーの最新の指示を優先するための重複実行防止ロジックが組み込まれたワークフローが生成されます。
+プロジェクトの技術スタックに合わせて、`claude.yml` を編集します。インストールスクリプトによって、PRレビューとタスク実行を自動で分岐し、重複実行を防止するロジックが組み込まれたワークフローが生成されます。
 
-以下は、Node.js プロジェクトのサンプルです。主に `steps` の環境設定部分や `allowed_tools` をプロジェクトに合わせて変更してください。
+以下は、`task` ジョブの環境設定部分のサンプルです。主に `steps` の環境設定部分や `allowed_tools` をプロジェクトに合わせて変更してください。
 
-#### `.github/workflows/claude.yml` のサンプル
+#### `.github/workflows/claude.yml` の `task` ジョブのサンプル
 
 ```yaml
-name: Claude Code
+# ... (on, permissions, concurrency, prepareジョブは省略) ...
 
-on:
-  issue_comment:
-    types: [created]
-
-# 必要な権限
-permissions:
-  contents: write
-  pull-requests: read # PR情報を読み取るために必要
-  issues: write
-  actions: write # 実行中のワークフローをキャンセルするために必要
-
-jobs:
-  claude:
+  task:
+    needs: prepare
+    if: needs.prepare.outputs.run_type == 'task'
     runs-on: ubuntu-latest
-    if: contains(github.event.comment.body, '@claude')
     steps:
-      # 1. 実行準備と競合ワークフローの処理
       - name: Prepare Claude Run
         id: prepare
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@master
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-run@@REF@@
 
-      # 2. リポジトリをチェックアウト
       - name: Checkout repository
+        if: steps.prepare.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.prepare.outputs.head_sha }}
@@ -119,12 +106,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. Claude を実行
       - name: Run Claude
-        uses: Javakky/claude-starter/.github/actions/run-claude@master
+        if: steps.prepare.outputs.should_run == 'true'
+        uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          github_token: ${{ github.token }}
-          comment_body: ${{ github.event.comment.body }}
+          comment_body: ${{ github.event.comment.body || github.event.pull_request.body || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
           # allowed_tools: |
@@ -140,19 +126,25 @@ jobs:
 
 ### `prepare-claude-run`
 
-**役割**: Claude の実行を準備し、競合する古いワークフローをキャンセルします。
+**役割**: Claude の実行を準備し、実行すべきジョブの種類（`review` または `task`）を判断します。また、権限チェックや不要な実行のスキップも行います。
+
+| 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
+|---|---|:---:|---|
+| `run_type` | 実行タイプを指定します。`review` または `task`。 | | `task` |
+| `github_event_before` | `synchronize` イベントの `before` のSHA。フォースプッシュ検知に使います。 | | |
+| `github_event_after` | `synchronize` イベントの `after` のSHA。フォースプッシュ検知に使います。 | | |
 
 | 出力 (`outputs`) | 説明 |
 |---|---|
 | `head_sha` | 実行対象となる Pull Request の HEAD コミットの SHA。`actions/checkout` の `ref` に渡すために使います。 |
+| `should_run` | ワークフローを続行すべきかどうかを示す真偽値。 |
 
 ### `run-claude`
 
-**役割**: Issue コメントを解析し、`anthropics/claude-code-action` を適切なパラメータで実行します。
+**役割**: Issue コメントを解析し、`anthropics/claude-code-action` を適切なパラメータで実行します（タスク実行用）。
 
 | 入力 (`inputs`) | 説明 | 必須 | デフォルト値 |
 |---|---|:---:|---|
-| `github_token` | GitHub トークン。 | ✅ | |
 | `comment_body` | トリガーとなったコメントの本文。 | ✅ | |
 | `claude_code_oauth_token` | Claude Code の OAuth トークン。 | ✅ | |
 | `default_model` | デフォルトで使用するモデル。 | | `sonnet` |
@@ -184,11 +176,10 @@ jobs:
 -   `.claude/` (ディレクトリ全体)
 -   `.github/actions/` (ディレクトリ全体。`prepare-claude-run`, `run-claude`, `run-claude-review` を含みます)
 -   `.github/workflows/claude.yml`
--   `.github/workflows/claude_review.yml`
 
 ### 2. ワークフローを調整する
 
-コピーした `.github/workflows/claude.yml` と `claude_review.yml` を開き、`uses:` のパスを調整します。
+コピーした `.github/workflows/claude.yml` を開き、`uses:` のパスを調整します。
 
 `claude-starter` リポジトリを直接参照するのではなく、あなたのリポジトリ内にコピーしたローカルのアクションを参照するように変更します。
 

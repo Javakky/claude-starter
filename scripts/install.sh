@@ -339,20 +339,10 @@ create_workflow_files() {
     claude_yml_url=$(get_raw_url "examples/.github/workflows/claude.yml.template")
     local claude_yml_dest="${TARGET_DIR}/.github/workflows/claude.yml"
 
-    local claude_review_yml_url
-    claude_review_yml_url=$(get_raw_url "examples/.github/workflows/claude_review.yml.template")
-    local claude_review_yml_dest="${TARGET_DIR}/.github/workflows/claude_review.yml"
-
     if [[ -e "$claude_yml_dest" ]] && ! is_true "$FORCE"; then
         warn "Skipping (already exists): $claude_yml_dest"
     else
         download_and_replace "$claude_yml_url" "$claude_yml_dest" "@@REF@@" "$ref_for_workflow"
-    fi
-
-    if [[ -e "$claude_review_yml_dest" ]] && ! is_true "$FORCE"; then
-        warn "Skipping (already exists): $claude_review_yml_dest"
-    else
-        download_and_replace "$claude_review_yml_url" "$claude_review_yml_dest" "@@REF@@" "$ref_for_workflow"
     fi
 }
 
