@@ -4,7 +4,7 @@ description: 'Resolves options, builds tools, and runs the Claude Code Action'
 inputs:
   github_token:
     description: 'GitHub token'
-    required: true
+    required: false
   comment_body:
     description: 'The body of the comment that triggered the workflow'
     required: true
@@ -73,11 +73,20 @@ runs:
         fi
         echo "tools=$TOOLS" >> $GITHUB_OUTPUT
 
-    - name: Run Claude Code Action
-      if: steps.trigger.outputs.triggered == 'true'
+    - name: Run Claude Code Action (Custom token mode)
+      if: steps.trigger.outputs.triggered == 'true' && (inputs.github_token != '' || inputs.github_token != null)
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_args: >-
+          --model ${{ steps.opts.outputs.model }}
+          --max-turns ${{ steps.opts.outputs.max_turns }}
+          ${{ steps.tools.outputs.tools }}
+    - name: Run Claude Code Action (App mode)
+      if: steps.trigger.outputs.triggered == 'true' && (inputs.github_token == '' || inputs.github_token == null)
+      uses: anthropics/claude-code-action@v1
+      with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
