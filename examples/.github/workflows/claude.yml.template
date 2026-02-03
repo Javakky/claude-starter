@@ -20,18 +20,21 @@ jobs:
   impl:
     runs-on: ubuntu-latest
     steps:
+      # ローカル action を読むために checkout は必要
+      # ここではデフォルトブランチを取る（issue起点 implement は Claude 側がブランチ作成する想定）
+      - name: Checkout repository to access local actions
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Prepare context
         id: prep
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
+        uses: ./.github/actions/prepare-claude-context@@REF@@
         with:
           mode: "implement"
-          impl_workflow_id: claude-impl.yml
-          create_pr_on_issue: "true"
-          issue_branch_prefix: "claude/issue-"
-          pr_title_prefix: "Claude:"
-          pr_body_template: |
-            This PR was created from issue #{{issue_number}}.
+          impl_workflow_id: claude.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
 
+      # PR上の@claude(implement)であれば、そのPRの review を止めたい（任意）
       - name: Cancel running reviews for this PR
         if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
         uses: Javakky/claude-starter/.github/actions/cancel-claude-runs@@REF@@
@@ -41,8 +44,9 @@ jobs:
           head_ref: ${{ steps.prep.outputs.head_ref }}
           head_sha: ${{ steps.prep.outputs.head_sha }}
 
-      - name: Checkout repository
-        if: steps.prep.outputs.should_run == 'true'
+      # PR conversation から呼ばれた場合だけ、そのブランチへ checkout し直す
+      - name: Checkout PR head branch (PR conversation only)
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.prep.outputs.head_ref }}
@@ -64,6 +68,7 @@ jobs:
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
+          # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
           comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド

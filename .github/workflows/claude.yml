@@ -20,30 +20,36 @@ jobs:
   impl:
     runs-on: ubuntu-latest
     steps:
+      # ローカル action を読むための checkout（デフォルトブランチでOK）
       - name: Checkout repository to access local actions
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare context
         id: prep
         uses: ./.github/actions/prepare-claude-context
         with:
           mode: "implement"
-          impl_workflow_id: claude-impl.yml
-          create_pr_on_issue: "true"
+          impl_workflow_id: Claude.yml
+          # Issue起点の枝名を Claude 側に合わせて事前作成する（A案）
           issue_branch_prefix: "claude/issue-"
-          pr_title_prefix: "Claude:"
-          pr_body_template: |
-            This PR was created from issue #{{issue_number}}.
+          compare_base_branch: "master"
+          allowed_comment_permissions: "admin,maintain,write"
+          max_workflow_runs_to_scan: "50"
 
       - name: Debug prepare outputs
         run: |
           echo "should_run=${{ steps.prep.outputs.should_run }}"
           echo "reason=${{ steps.prep.outputs.reason }}"
           echo "trigger_kind=${{ steps.prep.outputs.trigger_kind }}"
+          echo "issue_number=${{ steps.prep.outputs.issue_number }}"
           echo "pr_number=${{ steps.prep.outputs.pr_number }}"
           echo "head_sha=${{ steps.prep.outputs.head_sha }}"
           echo "head_ref=${{ steps.prep.outputs.head_ref }}"
+          echo "issue_url=${{ steps.prep.outputs.issue_url }}"
 
+      # PR上で implement が走る場合だけ、そのPRの review を止める（任意）
       - name: Cancel running reviews for this PR
         if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
         uses: ./.github/actions/cancel-claude-runs
@@ -53,24 +59,16 @@ jobs:
           head_ref: ${{ steps.prep.outputs.head_ref }}
           head_sha: ${{ steps.prep.outputs.head_sha }}
 
-      - name: Checkout repository
-        if: steps.prep.outputs.should_run == 'true'
+      # ★重要修正点：
+      # Issue起点 implement の head_ref は「Claude が checkout -b するために存在させた枝」なので
+      # ここで checkout すると claude-code-action 側の checkout -b と衝突して落ちる。
+      # よって「PR conversation のときだけ」 checkout する。
+      - name: Checkout PR head branch (PR conversation only)
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.prep.outputs.head_ref }}
           fetch-depth: 0
-
-      # --- プロジェクトの環境設定をここに追加 ---
-      # 例: Node.js
-      # - name: Set up Node.js
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: '20'
-      #     cache: 'npm'
-      #
-      # - name: Install dependencies
-      #   run: npm install
-      # ------------------------------------
 
       - name: Run Claude (implement)
         if: steps.prep.outputs.should_run == 'true'
@@ -78,9 +76,3 @@ jobs:
         with:
           comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 必要に応じてデフォルト値をオーバーライド
-          # default_model: 'opus'
-          # default_max_turns: 20
-          # allowed_tools: |
-          #   Bash(npm run lint)
-          #   Bash(npm run test)
