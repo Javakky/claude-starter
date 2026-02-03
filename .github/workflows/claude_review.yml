@@ -1,5 +1,5 @@
 name: Claude Review
-run-name: claude-review pr #${{ github.event.pull_request.number || github.event.issue.number }} (${{ github.event_name }})
+run-name: claude-review pr #${{ github.event.pull_request.number || github.event.issue.number }}
 
 on:
   pull_request:
@@ -11,31 +11,67 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: read
+  actions: write
+  id-token: write
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  # PRごとに一本化。新しいreviewが来たら古いreviewをキャンセル
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
+      # ローカル actions を使うための checkout
       - name: Checkout repository to access local actions
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare context
         id: prep
         uses: ./.github/actions/prepare-claude-context
         with:
-          mode: review
-          impl_workflow_id: claude-impl.yml
+          mode: "review"
+          # implement-running gate 用（あなたの implement workflow ファイル名に合わせる）
+          impl_workflow_id: claude.yml
+
+          # pr-sync skip rules
           skip_commit_prefixes: "docs:,style:,chore:,wip:"
           allow_final_sync_during_impl: "true"
-          # optional: implement最終コミット判定のマーカー（使わないなら空のままでOK）
-          final_sync_commit_marker: ""
+          # senderがBotじゃないケースに備えるなら marker を入れる（運用でClaude最終commitに付ける）
+          final_sync_commit_marker: "[claude-final]"
 
-      - name: Checkout repository
+          allowed_comment_permissions: "admin,maintain,write"
+          max_workflow_runs_to_scan: "50"
+
+      - name: Debug prepare outputs
+        run: |
+          echo "should_run=${{ steps.prep.outputs.should_run }}"
+          echo "reason=${{ steps.prep.outputs.reason }}"
+          echo "trigger_kind=${{ steps.prep.outputs.trigger_kind }}"
+          echo "issue_number=${{ steps.prep.outputs.issue_number }}"
+          echo "pr_number=${{ steps.prep.outputs.pr_number }}"
+          echo "head_sha=${{ steps.prep.outputs.head_sha }}"
+          echo "head_ref=${{ steps.prep.outputs.head_ref }}"
+          echo "issue_url=${{ steps.prep.outputs.issue_url }}"
+
+      # prepare が skip の場合はここで終了
+      - name: Stop early if skipped
+        if: steps.prep.outputs.should_run != 'true'
+        run: |
+          echo "Skipping review: ${{ steps.prep.outputs.reason }}"
+
+      # Review は PR context が必須（pull_request or PR conversation comment）
+      - name: Fail fast if PR context missing
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number == ''
+        run: |
+          echo "PR context is required for review but pr_number is empty."
+          exit 1
+
+      # レビュー対象の head_sha/head_ref を checkout（正しい差分をレビューするため）
+      - name: Checkout PR head
         if: steps.prep.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
@@ -47,3 +83,7 @@ jobs:
         uses: ./.github/actions/run-claude-review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 必要なら上書き
+          # model: 'haiku'
+          # max_turns: '30'
+          # prompt: '/review'
