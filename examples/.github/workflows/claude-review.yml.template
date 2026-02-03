@@ -15,8 +15,10 @@ permissions:
   id-token: write
 
 concurrency:
-  # PRごとに一本化。新しいreviewが来たら古いreviewをキャンセル
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: >-
+    claude-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+    -${{ github.event_name == 'pull_request' && 'pr' || 'comment' }}
+    -${{ github.event_name == 'issue_comment' && (github.event.comment.user.type == 'Bot' && 'bot' || 'user') || 'na' }}
   cancel-in-progress: true
 
 jobs:
