@@ -53,6 +53,7 @@ outputs:
     description: "reason for skip (debug)"
     value: ${{ steps.ctx.outputs.reason }}
   trigger_kind:
+    description: "trigger kind"
     value: ${{ steps.ctx.outputs.trigger_kind }}
 
   issue_number:
@@ -140,16 +141,24 @@ runs:
           const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
           const ok = (extra = {}) => setOut({ should_run: true, reason: '', ...extra });
 
+          async function listRunsForWorkflow(workflowId, perPage) {
+            // Octokitのメソッド差異を避けて request で叩く
+            const res = await github.request(
+              'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                per_page: perPage,
+              }
+            );
+            return res.data?.workflow_runs || [];
+          }
+          
           async function isImplementRunning({ prNumber, headRef, headSha }) {
             if (!implWorkflowId) return false;
             try {
-              const runsResp = await github.rest.actions.listWorkflowRunsForWorkflow({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: implWorkflowId,
-                per_page: maxRuns,
-              });
-              const runs = runsResp.data?.workflow_runs || [];
+              const runs = await listRunsForWorkflow(implWorkflowId, maxRuns);
               const key = prNumber ? `pr #${prNumber}`.toLowerCase() : '';
 
               return runs.some(r => {

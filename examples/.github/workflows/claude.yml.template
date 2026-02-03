@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: claude-impl-${{ github.event.issue.number }}
+  group: claude-impl-${{ github.event.issue.number }}-${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
 
       - name: Prepare context
         id: prep
-        uses: ./.github/actions/prepare-claude-context@@REF@@
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
         with:
           mode: "implement"
           impl_workflow_id: claude.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
