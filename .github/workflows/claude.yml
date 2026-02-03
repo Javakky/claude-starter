@@ -13,11 +13,18 @@ permissions:
   id-token: write
 
 concurrency:
-  group: claude-impl-${{ github.event.issue.number }}-${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
+  group: >-
+    claude-impl-${{ github.event.issue.number }}
+    -${{ contains(github.event.comment.body, '[review]') && 'review' || 'implement' }}
+    -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
 
 jobs:
   impl:
+    if: |
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '@claude') &&
+      !contains(github.event.comment.body, '[review]')
     runs-on: ubuntu-latest
     steps:
       # ローカル action を読むための checkout（デフォルトブランチでOK）

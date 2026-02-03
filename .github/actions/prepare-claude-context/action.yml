@@ -6,12 +6,10 @@ inputs:
     description: "review or implement"
     required: true
 
-  # review 側の「implement 実行中ガード」で使う
   impl_workflow_id:
     description: "Workflow file name or ID for Claude Implement (e.g. Claude.yml)"
     required: true
 
-  # pr-sync review 用（pull_requestイベントにのみ適用）
   skip_commit_prefixes:
     description: "Comma-separated prefixes to skip pr-sync review (e.g. docs:,style:,chore:,wip:)"
     required: false
@@ -34,12 +32,10 @@ inputs:
     required: false
     default: "50"
 
-  # Issue implement 用（A: Claudeの枝名規則に合わせて事前に枝を作る）
   issue_branch_prefix:
     description: "Branch prefix for issue-based work (e.g. claude/issue-)"
     required: false
     default: "claude/issue-"
-  # compare の base に使うブランチ名（Claude 側が master を使っているログがあるためデフォルト master）
   compare_base_branch:
     description: "Base branch name used in compare (e.g. master/main)"
     required: false
@@ -97,7 +93,6 @@ runs:
         COMPARE_BASE_BRANCH: ${{ inputs.compare_base_branch }}
       with:
         script: |
-          // Composite inputs are passed via env. (core.getInput reads github-script's inputs.)
           const modeRaw = process.env.MODE;
           const mode = String(modeRaw || '').trim().toLowerCase();
           core.info(`modeRaw=${JSON.stringify(modeRaw)} mode=${mode}`);
@@ -142,7 +137,6 @@ runs:
           const ok = (extra = {}) => setOut({ should_run: true, reason: '', ...extra });
 
           async function listRunsForWorkflow(workflowId, perPage) {
-            // Octokitのメソッド差異を避けて request で叩く
             const res = await github.request(
               'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
               {
@@ -154,12 +148,28 @@ runs:
             );
             return res.data?.workflow_runs || [];
           }
+
+          function inferIssueNumberFromHeadRef(headRef) {
+            // headRef: "claude/issue-18-20260201-1418" -> "18"
+            const m = String(headRef || '').match(/^claude\/issue-(\d+)-/);
+            return m ? m[1] : '';
+          }
           
           async function isImplementRunning({ prNumber, headRef, headSha }) {
             if (!implWorkflowId) return false;
+
+            const inferredIssue = inferIssueNumberFromHeadRef(headRef);
+
+            const keys = [];
+            if (prNumber) {
+              keys.push(`pr #${prNumber}`.toLowerCase(), `issue #${prNumber}`.toLowerCase());
+            }
+            if (inferredIssue && inferredIssue !== prNumber) {
+              keys.push(`issue #${inferredIssue}`.toLowerCase());
+            }
+
             try {
               const runs = await listRunsForWorkflow(implWorkflowId, maxRuns);
-              const key = prNumber ? `pr #${prNumber}`.toLowerCase() : '';
 
               return runs.some(r => {
                 if (!['queued', 'in_progress'].includes(r.status)) return false;
@@ -167,8 +177,9 @@ runs:
                 const prs = r.pull_requests || [];
                 if (prNumber && prs.some(p => String(p.number) === String(prNumber))) return true;
 
-                const title = String(r.display_title || '').toLowerCase();
-                if (key && title.includes(key)) return true;
+                // ★重要: run-name は r.name に入ることがあるので両方見る
+                const title = String(r.name || r.display_title || '').toLowerCase();
+                if (keys.length && keys.some(k => title.includes(k))) return true;
 
                 if (headRef && String(r.head_branch || '') === String(headRef)) return true;
                 if (headSha && String(r.head_sha || '') === String(headSha)) return true;
@@ -182,7 +193,6 @@ runs:
           }
 
           function formatUtcYmdHm(isoString) {
-            // isoString: "2026-02-03T07:54:12Z" -> "20260203-0754"
             const d = isoString ? new Date(isoString) : new Date();
             const y = d.getUTCFullYear();
             const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -193,7 +203,6 @@ runs:
           }
 
           async function ensureBranchExistsFromBase({ branchName, baseBranch }) {
-            // baseBranch のHEAD sha を取得して branchName を作る（存在してたらOK）
             let baseSha = '';
             try {
               const refResp = await github.rest.git.getRef({
@@ -216,7 +225,6 @@ runs:
               });
               core.info(`Created branch refs/heads/${branchName} from ${baseBranch}@${baseSha}`);
             } catch (e) {
-              // already exists => 422
               core.info(`Branch create skipped (maybe exists): ${e.message}`);
             }
             return baseSha;
@@ -224,7 +232,6 @@ runs:
 
           const ev = context.eventName;
 
-          // ---- pull_request (review only) ※review workflow でも使う場合のために残す
           if (ev === 'pull_request') {
             const pr = context.payload.pull_request;
             const prNumber = String(pr?.number || '');
@@ -241,7 +248,6 @@ runs:
             if (!headSha) return skip('no-head-sha', { issue_number: prNumber, pr_number: prNumber, trigger_kind: triggerKind });
             if (isFork) return skip('fork-pr-skip', { issue_number: prNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
 
-            // force-push-ish detection via compare (skip if status not normal)
             if (context.payload.action === 'synchronize') {
               const before = context.payload.before;
               const after = context.payload.after;
@@ -264,7 +270,6 @@ runs:
               }
             }
 
-            // head commit message prefix skip
             let headCommitMsg = '';
             try {
               const commitResp = await github.rest.repos.getCommit({
@@ -279,7 +284,6 @@ runs:
               }
             } catch (_) {}
 
-            // implement running gate (optional exception for final sync)
             const implementing = await isImplementRunning({ prNumber, headRef, headSha });
             if (implementing) {
               const isSync = context.payload.action === 'synchronize';
@@ -302,7 +306,6 @@ runs:
             });
           }
 
-          // ---- issue_comment (implement/review by comment)
           if (ev !== 'issue_comment') {
             return skip(`unsupported-event:${ev}`);
           }
@@ -316,12 +319,10 @@ runs:
 
           if (!issueNumber) return skip('no-issue-number');
 
-          // bot comment skip
           if (commentUserType.toLowerCase() === 'bot') {
             return skip('bot-comment', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
-          // normalize @ to avoid full-width, and lowercase
           const normalized = commentBody.replaceAll('＠', '@').toLowerCase();
           const hasClaude = normalized.includes('@claude');
           const hasReview = normalized.includes('[review]');
@@ -330,7 +331,6 @@ runs:
             return skip('no-@claude', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
-          // classify by comment
           let triggerKind = 'none';
           if (hasReview) {
             triggerKind = 'comment-review';
@@ -340,7 +340,6 @@ runs:
             if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
           }
 
-          // auth check for comment triggers
           const permResp = await github.rest.repos.getCollaboratorPermissionLevel({
             owner: context.repo.owner,
             repo: context.repo.repo,
@@ -353,12 +352,10 @@ runs:
 
           const isPrConversation = !!issue?.pull_request;
 
-          // comment-review requires PR context
           if (mode === 'review' && !isPrConversation) {
             return skip('comment-review-on-issue-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
           }
 
-          // PR conversation: resolve PR head ref/sha
           if (isPrConversation) {
             const prNumber = issueNumber;
 
@@ -381,7 +378,6 @@ runs:
                 return skip('no-head-ref', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
               }
 
-              // If this is review-by-comment, also gate when implement running
               if (mode === 'review') {
                 const implementing = await isImplementRunning({ prNumber, headRef, headSha });
                 if (implementing) {
@@ -403,15 +399,10 @@ runs:
             }
           }
 
-          // Normal issue (not PR conversation)
-          // A) Pre-create the exact branch name Claude will use, so compare won't 404.
-          // Observed pattern: `${issue_branch_prefix}${issueNumber}-${YYYYMMDD-HHMM}` (UTC)
-          // Use comment.created_at for stable timestamp.
           const createdAt = String(comment?.created_at || '');
           const ts = formatUtcYmdHm(createdAt || null);
           const branchName = `${issueBranchPrefix}${issueNumber}-${ts}`;
 
-          // Claude's log compared against "master". We must create branch from that base (or at least ensure it exists).
           let baseSha = '';
           try {
             baseSha = await ensureBranchExistsFromBase({ branchName, baseBranch: compareBaseBranch });
@@ -423,8 +414,8 @@ runs:
             issue_number: issueNumber,
             issue_url: issueUrl,
             pr_number: '',
-            head_sha: baseSha,     // base sha (useful for debug)
-            head_ref: branchName,  // this prevents compare 404
+            head_sha: baseSha,
+            head_ref: branchName,
             comment_body: commentBody,
             trigger_kind: triggerKind,
           });
