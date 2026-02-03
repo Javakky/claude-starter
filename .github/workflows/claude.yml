@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: claude-impl-${{ github.event.issue.number }}
+  group: claude-impl-${{ github.event.issue.number }}-${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
         uses: ./.github/actions/prepare-claude-context
         with:
           mode: "implement"
-          impl_workflow_id: Claude.yml
+          impl_workflow_id: claude.yml
           # Issue起点の枝名を Claude 側に合わせて事前作成する（A案）
           issue_branch_prefix: "claude/issue-"
           compare_base_branch: "master"
