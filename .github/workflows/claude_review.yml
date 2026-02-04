@@ -1,5 +1,5 @@
 name: Claude Review
-run-name: claude-review pr #${{ github.event.pull_request.number || github.event.issue.number }}
+run-name: "claude-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
 
 on:
   pull_request:

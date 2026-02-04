@@ -1,5 +1,5 @@
 name: Claude Implement
-run-name: claude-impl issue #${{ github.event.issue.number }}
+run-name: "claude-impl issue #${{ github.event.issue.number }}"
 
 on:
   issue_comment:
