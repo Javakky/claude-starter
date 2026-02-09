@@ -1,55 +1,51 @@
 name: "Prepare Claude Context"
-description: "Gate and classify events for Claude runs. For issue-based implement, pre-create Claude's target branch (no PR creation)."
+description: "このアクションの主な目的は、特定のイベント（プルリクエストの更新やIssueへのコメント）をトリガーとして、後続のClaude Codeワークフローを実行すべきかどうかを判断し、そのために必要な情報を準備することです"
 
 inputs:
   mode:
-    description: "review or implement"
+    description: "review / implement"
     required: true
 
   impl_workflow_id:
-    description: "Workflow file name or ID for Claude Implement (e.g. Claude.yml)"
+    description: "implementモードのワークフローがすでに実行中かどうかをチェックするための、ワークフローのファイル名またはIDです（e.g. claude.yml）"
     required: true
 
   skip_commit_prefixes:
-    description: "Comma-separated prefixes to skip pr-sync review (e.g. docs:,style:,chore:,wip:)"
+    description: "ここで指定されたプレフィックスで始まるコミットメッセージを持つPRのレビューをスキップします（e.g. docs:,style:,chore:,wip:）"
     required: false
     default: "docs:,style:,chore:,wip:"
   allow_final_sync_during_impl:
-    description: "Allow pull_request synchronize review during implement (heuristics)."
+    description: "implementの実行中に行われたPRの同期（push）に対するレビューを許可するかどうか"
     required: false
     default: "true"
-  final_sync_commit_marker:
-    description: "If non-empty, allow synchronize during implement when HEAD commit message contains this marker."
-    required: false
-    default: ""
 
   allowed_comment_permissions:
-    description: "Comma-separated allowed permission levels for comment triggers"
+    description: "コメントによってアクションをトリガーできるユーザーのリポジトリに対する権限レベルを指定します（e.g. admin, write）"
     required: false
     default: "admin,maintain,write"
   max_workflow_runs_to_scan:
-    description: "Max workflow runs to scan when checking implement running"
+    description: "実行中のワークフローをチェックする際に、スキャンする最新のワークフロー実行履歴の最大数です"
     required: false
     default: "50"
 
   issue_branch_prefix:
-    description: "Branch prefix for issue-based work (e.g. claude/issue-)"
+    description: "implementモードでIssueから新しいブランチを作成する際の、ブランチ名の接頭辞です(e.g. claude/issue-）"
     required: false
     default: "claude/issue-"
   compare_base_branch:
-    description: "Base branch name used in compare (e.g. master/main)"
+    description: "新しいブランチを作成する際の元となるブランチ名です（e.g. master/main）"
     required: false
     default: "master"
 
 outputs:
   should_run:
-    description: "true if the workflow should proceed"
+    description: "Claude の処理を実行するべきか？"
     value: ${{ steps.ctx.outputs.should_run }}
   reason:
-    description: "reason for skip (debug)"
+    description: "スキップする理由"
     value: ${{ steps.ctx.outputs.reason }}
   trigger_kind:
-    description: "trigger kind"
+    description: "ワークフローの起動理由"
     value: ${{ steps.ctx.outputs.trigger_kind }}
 
   issue_number:
@@ -60,13 +56,13 @@ outputs:
     value: ${{ steps.ctx.outputs.issue_url }}
 
   pr_number:
-    description: "PR number (only when PR context is resolved)"
+    description: "PR number (PR上で実行された場合のみ)"
     value: ${{ steps.ctx.outputs.pr_number }}
   head_sha:
-    description: "Head sha (PR head or created branch base sha)"
+    description: "対象のコミットハッシュ"
     value: ${{ steps.ctx.outputs.head_sha }}
   head_ref:
-    description: "Head ref (branch). For issue-based implement, this will be the pre-created Claude branch."
+    description: "対象のブランチ"
     value: ${{ steps.ctx.outputs.head_ref }}
 
   comment_body:
@@ -84,7 +80,6 @@ runs:
 
         SKIP_COMMIT_PREFIXES: ${{ inputs.skip_commit_prefixes }}
         ALLOW_FINAL_SYNC_DURING_IMPL: ${{ inputs.allow_final_sync_during_impl }}
-        FINAL_SYNC_COMMIT_MARKER: ${{ inputs.final_sync_commit_marker }}
 
         ALLOWED_COMMENT_PERMISSIONS: ${{ inputs.allowed_comment_permissions }}
         MAX_WORKFLOW_RUNS_TO_SCAN: ${{ inputs.max_workflow_runs_to_scan }}
@@ -105,7 +100,6 @@ runs:
             .filter(Boolean);
 
           const allowFinalSync = String(process.env.ALLOW_FINAL_SYNC_DURING_IMPL || 'true').toLowerCase() === 'true';
-          const finalMarker = String(process.env.FINAL_SYNC_COMMIT_MARKER || '');
 
           const allowedPerms = new Set(
             String(process.env.ALLOWED_COMMENT_PERMISSIONS || 'admin,maintain,write')
@@ -116,7 +110,13 @@ runs:
 
           const maxRuns = Math.min(Math.max(Number(process.env.MAX_WORKFLOW_RUNS_TO_SCAN || '50'), 1), 100);
 
-          const issueBranchPrefix = String(process.env.ISSUE_BRANCH_PREFIX || 'claude/issue-');
+          const issueBranchPrefixRaw = String(process.env.ISSUE_BRANCH_PREFIX || 'claude/issue-');
+          // Sanitize the branch prefix to avoid invalid characters.
+          // Ref: https://git-scm.com/docs/git-check-ref-format
+          const issueBranchPrefix = issueBranchPrefixRaw.replace(/[\s\\~^:?*\[\]]|(\.\.)|@\{/g, '-').replace(/^-+|-+$/g, '');
+          if (issueBranchPrefixRaw !== issueBranchPrefix) {
+            core.warning(`Sanitized 'issue_branch_prefix' from '${issueBranchPrefixRaw}' to '${issueBranchPrefix}'`);
+          }
           const compareBaseBranch = String(process.env.COMPARE_BASE_BRANCH || 'master');
 
           function setOut(obj) {
@@ -133,9 +133,11 @@ runs:
 
             core.setOutput('comment_body', obj.comment_body || '');
           }
+
           const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
           const ok = (extra = {}) => setOut({ should_run: true, reason: '', ...extra });
 
+          /** 実行中の対象のワークフロー (claude.yml) の一覧を取得する */
           async function listRunsForWorkflow(workflowId, perPage) {
             const res = await github.request(
               'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
@@ -149,17 +151,20 @@ runs:
             return res.data?.workflow_runs || [];
           }
 
+          /** Claude が生成するブランチ名から issue ID を推察する */
           function inferIssueNumberFromHeadRef(headRef) {
             // headRef: "claude/issue-18-20260201-1418" -> "18"
             const m = String(headRef || '').match(/^claude\/issue-(\d+)-/);
             return m ? m[1] : '';
           }
           
+          /** 同じ PR で実行中の実装があるかを確認する */
           async function isImplementRunning({ prNumber, headRef, headSha }) {
             if (!implWorkflowId) return false;
 
             const inferredIssue = inferIssueNumberFromHeadRef(headRef);
 
+            // PR と ISSUE の ID が入る
             const keys = [];
             if (prNumber) {
               keys.push(`pr #${prNumber}`.toLowerCase(), `issue #${prNumber}`.toLowerCase());
@@ -171,13 +176,14 @@ runs:
             try {
               const runs = await listRunsForWorkflow(implWorkflowId, maxRuns);
 
+              // 実装が進行中なら全ての処理は中断されるので some で判定するだけでよい
               return runs.some(r => {
                 if (!['queued', 'in_progress'].includes(r.status)) return false;
 
                 const prs = r.pull_requests || [];
                 if (prNumber && prs.some(p => String(p.number) === String(prNumber))) return true;
 
-                // ★重要: run-name は r.name に入ることがあるので両方見る
+                // run-name は r.name に入ることがあるので両方見る
                 const title = String(r.name || r.display_title || '').toLowerCase();
                 if (keys.length && keys.some(k => title.includes(k))) return true;
 
@@ -202,34 +208,6 @@ runs:
             return `${y}${m}${day}-${hh}${mm}`;
           }
 
-          async function ensureBranchExistsFromBase({ branchName, baseBranch }) {
-            let baseSha = '';
-            try {
-              const refResp = await github.rest.git.getRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `heads/${baseBranch}`,
-              });
-              baseSha = String(refResp.data?.object?.sha || '');
-            } catch (e) {
-              throw new Error(`failed-get-base-ref:${baseBranch}:${e.message}`);
-            }
-            if (!baseSha) throw new Error(`failed-resolve-base-sha:${baseBranch}`);
-
-            try {
-              await github.rest.git.createRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `refs/heads/${branchName}`,
-                sha: baseSha,
-              });
-              core.info(`Created branch refs/heads/${branchName} from ${baseBranch}@${baseSha}`);
-            } catch (e) {
-              core.info(`Branch create skipped (maybe exists): ${e.message}`);
-            }
-            return baseSha;
-          }
-
           const ev = context.eventName;
 
           if (ev === 'pull_request') {
@@ -242,12 +220,15 @@ runs:
 
             const triggerKind = 'pr-sync';
 
+            // 実装タスクは PR 更新で自動発火すべきでない
             if (mode !== 'review') {
               return skip('mode-mismatch:want-review', { issue_number: prNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
             }
+            // fork や commit がない PR はレビューしない
             if (!headSha) return skip('no-head-sha', { issue_number: prNumber, pr_number: prNumber, trigger_kind: triggerKind });
             if (isFork) return skip('fork-pr-skip', { issue_number: prNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
 
+            // pr_sync かつ force push の場合スキップ
             if (context.payload.action === 'synchronize') {
               const before = context.payload.before;
               const after = context.payload.after;
@@ -271,6 +252,7 @@ runs:
             }
 
             let headCommitMsg = '';
+            // コミットメッセージの先頭が wip: などならスキップ
             try {
               const commitResp = await github.rest.repos.getCommit({
                 owner: context.repo.owner,
@@ -284,12 +266,13 @@ runs:
               }
             } catch (_) {}
 
+            // 実装中はレビューを止める
+            // bot による pr_sync コミットによる発火は実装の完了を表すのでスキップしない
             const implementing = await isImplementRunning({ prNumber, headRef, headSha });
             if (implementing) {
               const isSync = context.payload.action === 'synchronize';
               const senderType = String(context.payload.sender?.type || '');
-              const markerOk = finalMarker && headCommitMsg && headCommitMsg.includes(finalMarker);
-              const allow = allowFinalSync && isSync && (senderType === 'Bot' || markerOk);
+              const allow = allowFinalSync && isSync && (senderType === 'Bot');
               if (!allow) {
                 return skip('implement-running', { issue_number: prNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
               }
@@ -305,6 +288,8 @@ runs:
               trigger_kind: triggerKind,
             });
           }
+          
+          // ここからコメントによる発火
 
           if (ev !== 'issue_comment') {
             return skip(`unsupported-event:${ev}`);
@@ -318,11 +303,13 @@ runs:
           const commentUserType = String(comment?.user?.type || '');
 
           if (!issueNumber) return skip('no-issue-number');
-
+          
+          // bot のコメントで実装は発火しない 
           if (commentUserType.toLowerCase() === 'bot') {
             return skip('bot-comment', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
+          // @claude [review] はレビュー依頼なので実装を発火させない
           const normalized = commentBody.replaceAll('＠', '@').toLowerCase();
           const hasClaude = normalized.includes('@claude');
           const hasReview = normalized.includes('[review]');
@@ -331,6 +318,7 @@ runs:
             return skip('no-@claude', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
+          // TODO: より先頭で判定した方がよさそう
           let triggerKind = 'none';
           if (hasReview) {
             triggerKind = 'comment-review';
@@ -340,6 +328,7 @@ runs:
             if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
           }
 
+          // 実装はコメント者に事前指定された以上の権限がないなら発火しない
           const permResp = await github.rest.repos.getCollaboratorPermissionLevel({
             owner: context.repo.owner,
             repo: context.repo.repo,
@@ -352,11 +341,13 @@ runs:
 
           const isPrConversation = !!issue?.pull_request;
 
+          // issue 上でのレビューはサポートしていない
           if (mode === 'review' && !isPrConversation) {
             return skip('comment-review-on-issue-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
           }
 
           if (isPrConversation) {
+            // GitHub では issue と PR の番号は通しなので同じように扱える
             const prNumber = issueNumber;
 
             try {
@@ -371,6 +362,7 @@ runs:
               const headRef = pr.head?.ref || '';
               const fullName = pr.head?.repo?.full_name || '';
               const isFork = fullName !== `${context.repo.owner}/${context.repo.repo}`;
+              // fork や branch が既に削除された PR に実装は追加しない
               if (isFork) {
                 return skip('fork-pr-skip', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
               }
@@ -378,6 +370,7 @@ runs:
                 return skip('no-head-ref', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
               }
 
+              // 実装タスクの実行中はレビューをスキップする
               if (mode === 'review') {
                 const implementing = await isImplementRunning({ prNumber, headRef, headSha });
                 if (implementing) {
@@ -398,24 +391,18 @@ runs:
               return skip(`failed-get-pr:${e.message}`, { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
             }
           }
+          
+          // ここから issue のコメントによる発火
 
           const createdAt = String(comment?.created_at || '');
           const ts = formatUtcYmdHm(createdAt || null);
-          const branchName = `${issueBranchPrefix}${issueNumber}-${ts}`;
-
-          let baseSha = '';
-          try {
-            baseSha = await ensureBranchExistsFromBase({ branchName, baseBranch: compareBaseBranch });
-          } catch (e) {
-            return skip(String(e.message || e), { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
-          }
 
           return ok({
             issue_number: issueNumber,
             issue_url: issueUrl,
             pr_number: '',
-            head_sha: baseSha,
-            head_ref: branchName,
+            head_sha: '',
+            head_ref: '',
             comment_body: commentBody,
             trigger_kind: triggerKind,
           });
