@@ -44,17 +44,22 @@ your-project/
 │   │   ├── prepare-claude-context/ # イベントを解析し、実行を制御する
 │   │   ├── run-claude/             # 実装タスクを実行する
 │   │   ├── run-claude-review/      # レビュータスクを実行する
+│   │   ├── run-claude-plan/        # 実装プランを Issue コメントに投稿する
+│   │   ├── run-claude-breakdown/   # プランを Issue に分解して Project に追加する
 │   │   └── cancel-claude-runs/     # 既存のワークフロー実行をキャンセルする
 │   ├── workflows/
 │   │   ├── claude.yml              # @claude コメントによる実装タスクを実行するWF
 │   │   ├── claude-review.yml       # PRの自動レビューを実行するWF
+│   │   ├── claude-plan.yml         # @claude [plan] によるプラン作成WF
+│   │   ├── claude-breakdown.yml    # @claude [breakdown] によるIssue分解WF
+│   │   ├── claude-milestone.yml    # Milestone作成時にタスク分解用Issueを自動作成するWF
 │   │   └── sync_templates.yml      # .claude/ ディレクトリを更新するWF
 │   ├── pull_request_template.md
 │   └── ISSUE_TEMPLATE/
 │       └── agent_task.md
 ├── scripts/
-│   └── sync_templates.py
 │   ├── install.sh        # このインストールスクリプト
+│   └── sync_templates.py
 ├── docs/
 │   └── agent/
 │       ├── TASK.md
@@ -86,35 +91,28 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ```yaml
 # ...
-      - name: Checkout code
-        if: steps.prep.outputs.should_run == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.prep.outputs.head_sha }} # Falls back to default branch if head_sha is empty
-          fetch-depth: 0
+      # --- プロジェクトの環境設定をここに追加 ---
+      # 例: Node.js
+      # - name: Set up Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20'
+      #     cache: 'npm'
+      #
+      # - name: Install dependencies
+      #   run: npm install
+      # ------------------------------------
 
-      # --- ▼ プロジェクトの環境設定をここに追加 ▼ ---
-      - name: Set up Node.js
-        if: steps.prep.outputs.should_run == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        if: steps.prep.outputs.should_run == 'true'
-        run: npm install
-      # --- ▲ プロジェクトの環境設定をここに追加 ▲ ---
-
-      - name: Run Claude
+      - name: Run Claude (implement)
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
         with:
-          issue_number: ${{ steps.prep.outputs.issue_number }}
-          pr_number: ${{ steps.prep.outputs.pr_number }}
+          # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
           comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
+          # default_model: 'opus'
+          # default_max_turns: 20
           # allowed_tools: |
           #   Bash(npm run lint)
           #   Bash(npm run test)
@@ -132,8 +130,8 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 | 入力 (`inputs`) | 説明 |
 |---|---|
-| `mode` | `implement` または `review` を指定し、ワークフローの目的を伝えます。 |
-| `impl_workflow_id` | 実装ワークフローのファイル名（例: `claude-impl.yml`）。レビュー中に実装が実行されていないか確認するために使います。 |
+| `mode` | `implement` / `review` / `plan` / `breakdown` を指定し、ワークフローの目的を伝えます。 |
+| `impl_workflow_id` | 実装ワークフローのファイル名（例: `claude.yml`）。レビュー中に実装が実行されていないか確認するために使います。 |
 | `skip_commit_prefixes` | レビューをスキップするコミットメッセージの接頭辞（例: `docs:,wip:`）。 |
 | `allowed_comment_permissions` | コメントでの実行を許可するユーザー権限（例: `admin,write`）。 |
 
@@ -144,6 +142,8 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 | `pr_number` | 実行対象となるPRの番号（PRでない場合は空）。 |
 | `head_sha`, `head_ref` | 実行対象となるPRのブランチ情報（PRでない場合は空）。 |
 | `comment_body` | トリガーとなったコメントの本文。 |
+| `milestone_number` | Milestone 番号（breakdown モードで Issue に milestone が紐付いている場合）。 |
+| `milestone_title` | Milestone タイトル（breakdown モードで Issue に milestone が紐付いている場合）。 |
 
 
 ### `run-claude`
@@ -172,6 +172,46 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 | `prompt` | レビューを依頼する際のプロンプト（デフォルト: `/review`）。 |
 
 
+### `run-claude-plan`
+
+**役割**: Issue に対して実装プランを作成し、Issue コメントに投稿します。コードの実装は行いません。Issue コメントで `@claude [plan]` と書くと起動します。
+
+コメント本文に `[sonnet]`/`[opus]`/`[haiku]` や `[max-turns=N]` を含めることでモデルとターン数を上書きできます。
+
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `comment_body` | トリガーとなったコメントの本文。モデル・ターン数の解析に使用。 |
+| `issue_number` | プランを投稿する Issue 番号。 |
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 |
+| `github_token` | GitHub トークン（省略時は App モードで動作）。 |
+| `default_model` | デフォルトのモデル（デフォルト: `sonnet`）。 |
+| `default_max_turns` | デフォルトのターン数（デフォルト: `50`）。 |
+| `allowed_tools` | Claude に許可する追加のツール（改行区切り）。 |
+
+
+### `run-claude-breakdown`
+
+**役割**: Issue の最新プランコメントを読み取り、並行作業可能な粒度でタスクを分解して GitHub Issue を作成し、同じ Milestone に追加します。Issue コメントで `@claude [breakdown]` と書くと起動します。
+
+**重要**: breakdown は Milestone に紐づいた Issue でのみ実行できます。Milestone に紐づいていない Issue でコマンドを実行すると、警告メッセージが表示されスキップされます。
+
+分解は4フェーズで実行されます: プラン取得 → タスク草案作成 → 自己レビュー（網羅性・並行性・粒度チェック）→ Issue 作成 & Milestone 追加。
+
+コメント本文に `[sonnet]`/`[opus]`/`[haiku]` や `[max-turns=N]` を含めることでモデルとターン数を上書きできます。
+
+| 入力 (`inputs`) | 説明 |
+|---|---|
+| `comment_body` | トリガーとなったコメントの本文。モデル・ターン数の解析に使用。 |
+| `issue_number` | プランコメントを参照する Issue 番号。 |
+| `milestone_number` | 分解したタスクを追加する Milestone 番号。 |
+| `milestone_title` | Milestone タイトル。 |
+| `claude_code_oauth_token` | Claude Code の OAuth トークン。 |
+| `github_token` | GitHub トークン（省略時は App モードで動作）。 |
+| `default_model` | デフォルトのモデル（デフォルト: `opus`）。 |
+| `default_max_turns` | デフォルトのターン数（デフォルト: `100`）。 |
+| `allowed_tools` | Claude に許可する追加のツール（改行区切り）。 |
+
+
 ### `cancel-claude-runs`
 
 **役割**: 指定されたワークフローの実行をキャンセルします。主に、実装タスク(`claude.yml`)が開始されたときに、進行中のレビュータスク(`claude-review.yml`)を停止するために使用されます。
@@ -180,6 +220,28 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 |---|---|
 | `workflow_id` | キャンセル対象のワークフローのファイル名（例: `claude-review.yml`）。 |
 | `pr_number` | 対象となる Pull Request の番号。 |
+
+---
+
+## プロンプトのカスタマイズ
+
+`run-claude-plan` と `run-claude-breakdown` は `docs/agent/` にあるプロンプトファイルを参照します。プロジェクトに合わせてカスタマイズしてください。
+
+### プロンプトファイル
+
+| ファイル | 説明 |
+|---|---|
+| `docs/agent/PLAN_PROMPT.md` | plan 用のプロンプト |
+| `docs/agent/BREAKDOWN_PROMPT.md` | breakdown 用のプロンプト |
+
+### プレースホルダー
+
+プロンプトファイル内で以下のプレースホルダーが使用できます：
+
+| プレースホルダー | 説明 |
+|---|---|
+| `{{ISSUE_NUMBER}}` | 対象の Issue 番号 |
+| `{{MILESTONE_TITLE}}` | Milestone タイトル（breakdown のみ） |
 
 ---
 
@@ -195,6 +257,9 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 -   `.github/actions/` (ディレクトリ全体)
 -   `examples/.github/workflows/claude.yml.template` を `.github/workflows/claude.yml` としてコピー
 -   `examples/.github/workflows/claude-review.yml.template` を `.github/workflows/claude-review.yml` としてコピー
+-   `examples/.github/workflows/claude-plan.yml.template` を `.github/workflows/claude-plan.yml` としてコピー
+-   `examples/.github/workflows/claude-breakdown.yml.template` を `.github/workflows/claude-breakdown.yml` としてコピー
+-   `examples/.github/workflows/claude-milestone.yml.template` を `.github/workflows/claude-milestone.yml` としてコピー
 
 ### 2. ワークフローを調整する
 
