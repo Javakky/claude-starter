@@ -3,7 +3,7 @@ description: "このアクションの主な目的は、特定のイベント（
 
 inputs:
   mode:
-    description: "review / implement"
+    description: "review / implement / plan / breakdown"
     required: true
 
   impl_workflow_id:
@@ -69,6 +69,13 @@ outputs:
     description: "comment body if issue_comment, otherwise empty"
     value: ${{ steps.ctx.outputs.comment_body }}
 
+  milestone_number:
+    description: "Milestone number (breakdown モードで Issue に milestone が紐付いている場合)"
+    value: ${{ steps.ctx.outputs.milestone_number }}
+  milestone_title:
+    description: "Milestone title (breakdown モードで Issue に milestone が紐付いている場合)"
+    value: ${{ steps.ctx.outputs.milestone_title }}
+
 runs:
   using: "composite"
   steps:
@@ -132,6 +139,9 @@ runs:
             core.setOutput('head_ref', obj.head_ref || '');
 
             core.setOutput('comment_body', obj.comment_body || '');
+
+            core.setOutput('milestone_number', obj.milestone_number ? String(obj.milestone_number) : '');
+            core.setOutput('milestone_title', obj.milestone_title || '');
           }
 
           const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
@@ -309,10 +319,11 @@ runs:
             return skip('bot-comment', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
-          // @claude [review] はレビュー依頼なので実装を発火させない
           const normalized = commentBody.replaceAll('＠', '@').toLowerCase();
           const hasClaude = normalized.includes('@claude');
           const hasReview = normalized.includes('[review]');
+          const hasPlan = normalized.includes('[plan]');
+          const hasBreakdown = normalized.includes('[breakdown]');
 
           if (!hasClaude) {
             return skip('no-@claude', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
@@ -323,6 +334,12 @@ runs:
           if (hasReview) {
             triggerKind = 'comment-review';
             if (mode !== 'review') return skip('mode-mismatch:want-review', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+          } else if (hasPlan) {
+            triggerKind = 'comment-plan';
+            if (mode !== 'plan') return skip('mode-mismatch:want-plan', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+          } else if (hasBreakdown) {
+            triggerKind = 'comment-breakdown';
+            if (mode !== 'breakdown') return skip('mode-mismatch:want-breakdown', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
           } else {
             triggerKind = 'comment-implement';
             if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
@@ -347,6 +364,14 @@ runs:
           }
 
           if (isPrConversation) {
+            // plan / breakdown は Issue コメントのみ対応（PR コメントは非サポート）
+            if (triggerKind === 'comment-plan') {
+              return skip('plan-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            }
+            if (triggerKind === 'comment-breakdown') {
+              return skip('breakdown-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            }
+
             // GitHub では issue と PR の番号は通しなので同じように扱える
             const prNumber = issueNumber;
 
@@ -396,6 +421,38 @@ runs:
 
           const createdAt = String(comment?.created_at || '');
           const ts = formatUtcYmdHm(createdAt || null);
+
+          // breakdown モードの場合、Issue に milestone が紐付いているかチェック
+          if (mode === 'breakdown') {
+            const milestone = issue?.milestone;
+            if (!milestone) {
+              // milestone が紐付いていない場合、警告コメントを投稿してスキップ
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number(issueNumber),
+                  body: '> [!WARNING]\n> `[breakdown]` は Milestone に紐づいた Issue でのみ実行できます。\n> この Issue を Milestone に追加してから再度お試しください。'
+                });
+              } catch (e) {
+                core.warning(`Failed to post warning comment: ${e.message}`);
+              }
+              return skip('breakdown-requires-milestone', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            }
+
+            // milestone 情報を出力に含める
+            return ok({
+              issue_number: issueNumber,
+              issue_url: issueUrl,
+              pr_number: '',
+              head_sha: '',
+              head_ref: '',
+              comment_body: commentBody,
+              trigger_kind: triggerKind,
+              milestone_number: milestone.number,
+              milestone_title: milestone.title,
+            });
+          }
 
           return ok({
             issue_number: issueNumber,

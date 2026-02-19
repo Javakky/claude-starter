@@ -1,0 +1,111 @@
+name: "Run Claude Plan"
+description: "コメント本文からモデル・ターン数を解決し、実装なしでプランを Issue コメントに投稿する"
+
+inputs:
+  github_token:
+    description: "GitHub token"
+    required: false
+  comment_body:
+    description: "トリガーとなったコメントの本文（モデル・ターン数の解決に使用）"
+    required: true
+  issue_number:
+    description: "プランを投稿する Issue 番号"
+    required: true
+  claude_code_oauth_token:
+    description: "Claude Code OAuth Token"
+    required: true
+  default_model:
+    description: "デフォルトの Claude モデル"
+    required: false
+    default: "sonnet"
+  default_max_turns:
+    description: "デフォルトの max turns（コードリーディングが少ない分、実装より多めに設定）"
+    required: false
+    default: "50"
+  allowed_tools:
+    description: "追加で許可するツール（改行区切り）"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve Claude options
+      id: opts
+      uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
+      with:
+        script: |
+          const body = process.env.COMMENT_BODY || "";
+
+          const model =
+            body.includes("[sonnet]") ? "sonnet" :
+            body.includes("[opus]")   ? "opus"   :
+            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.default_model }}";
+
+          const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
+          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.default_max_turns }}");
+
+          core.setOutput("model", model);
+          core.setOutput("max_turns", String(maxTurns));
+
+    - name: Build allowed tools
+      id: tools
+      shell: bash
+      env:
+        CUSTOM_TOOLS: ${{ inputs.allowed_tools }}
+      run: |
+        TOOLS=""
+        if [ -n "$CUSTOM_TOOLS" ]; then
+          while IFS= read -r tool; do
+            [ -n "$tool" ] && TOOLS="$TOOLS --allowedTools \"$tool\""
+          done <<< "$CUSTOM_TOOLS"
+        fi
+        echo "tools=$TOOLS" >> $GITHUB_OUTPUT
+
+    - name: Load prompt
+      id: prompt
+      shell: bash
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+      run: |
+        PROMPT_FILE="docs/agent/PLAN_PROMPT.md"
+
+        if [ ! -f "$PROMPT_FILE" ]; then
+          echo "::error::Prompt file not found: $PROMPT_FILE"
+          exit 1
+        fi
+
+        # プロンプトファイルを読み込み、プレースホルダーを置換
+        PROMPT=$(cat "$PROMPT_FILE" | sed "s/{{ISSUE_NUMBER}}/$ISSUE_NUMBER/g")
+
+        # 複数行の出力を GITHUB_OUTPUT に設定
+        echo "content<<EOF" >> $GITHUB_OUTPUT
+        echo "$PROMPT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Run Claude Plan Action (Custom token mode)
+      if: inputs.github_token != '' && inputs.github_token != null
+      uses: anthropics/claude-code-action@v1
+      with:
+        github_token: ${{ inputs.github_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        prompt: ${{ steps.prompt.outputs.content }}
+        claude_args: >-
+          --model ${{ steps.opts.outputs.model }}
+          --max-turns ${{ steps.opts.outputs.max_turns }}
+          --allowedTools "Bash(gh issue comment:*),Bash(gh issue view:*),Read,Glob,Grep"
+          ${{ steps.tools.outputs.tools }}
+
+    - name: Run Claude Plan Action (App mode)
+      if: inputs.github_token == '' || inputs.github_token == null
+      uses: anthropics/claude-code-action@v1
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        prompt: ${{ steps.prompt.outputs.content }}
+        claude_args: >-
+          --model ${{ steps.opts.outputs.model }}
+          --max-turns ${{ steps.opts.outputs.max_turns }}
+          --allowedTools "Bash(gh issue comment:*),Bash(gh issue view:*),Read,Glob,Grep"
+          ${{ steps.tools.outputs.tools }}

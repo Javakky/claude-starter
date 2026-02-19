@@ -278,11 +278,13 @@ declare -a CLAUDE_FILES=(
     ".claude/rules/40_output.md"
 )
 
-# 新しく追加: Composite Actions のファイルリスト
+# Composite Actions のファイルリスト
 declare -a ACTION_FILES=(
     ".github/actions/prepare-claude-context/action.yml"
     ".github/actions/run-claude/action.yml"
     ".github/actions/run-claude-review/action.yml"
+    ".github/actions/run-claude-plan/action.yml"
+    ".github/actions/run-claude-breakdown/action.yml"
     ".github/actions/cancel-claude-runs/action.yml"
 )
 
@@ -298,6 +300,8 @@ declare -a SCRIPTS_AND_DOCS_FILES=(
     "scripts/sync_templates.py"
     "docs/agent/TASK.md"
     "docs/agent/PR.md"
+    "docs/agent/PLAN_PROMPT.md"
+    "docs/agent/BREAKDOWN_PROMPT.md"
 )
 
 # === メイン処理 ===
@@ -357,6 +361,39 @@ create_workflow_files() {
     else
         download_and_replace "$review_yml_url" "$review_yml_dest" "@@REF@@" "$ref_for_workflow"
     fi
+
+    # claude-plan.yml
+    local plan_yml_url
+    plan_yml_url=$(get_raw_url "examples/.github/workflows/claude-plan.yml.template")
+    local plan_yml_dest="${TARGET_DIR}/.github/workflows/claude-plan.yml"
+
+    if [[ -e "$plan_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $plan_yml_dest"
+    else
+        download_and_replace "$plan_yml_url" "$plan_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
+
+    # claude-breakdown.yml
+    local breakdown_yml_url
+    breakdown_yml_url=$(get_raw_url "examples/.github/workflows/claude-breakdown.yml.template")
+    local breakdown_yml_dest="${TARGET_DIR}/.github/workflows/claude-breakdown.yml"
+
+    if [[ -e "$breakdown_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $breakdown_yml_dest"
+    else
+        download_and_replace "$breakdown_yml_url" "$breakdown_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
+
+    # claude-milestone.yml
+    local milestone_yml_url
+    milestone_yml_url=$(get_raw_url "examples/.github/workflows/claude-milestone.yml.template")
+    local milestone_yml_dest="${TARGET_DIR}/.github/workflows/claude-milestone.yml"
+
+    if [[ -e "$milestone_yml_dest" ]] && ! is_true "$FORCE"; then
+        warn "Skipping (already exists): $milestone_yml_dest"
+    else
+        download_and_replace "$milestone_yml_url" "$milestone_yml_dest" "@@REF@@" "$ref_for_workflow"
+    fi
 }
 
 install_github_directory() {
@@ -406,7 +443,6 @@ main() {
     fi
 
     if ! is_true "$NO_WORKFLOWS"; then
-        # 関数名を install_github_workflows から install_github_directory に変更
         install_github_directory
     fi
 
