@@ -1,0 +1,50 @@
+name: Claude Milestone
+run-name: "claude-milestone: ${{ github.event.milestone.title }}"
+
+on:
+  milestone:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-breakdown-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create breakdown issue for milestone
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const milestone = context.payload.milestone;
+
+            // タスク分解用の Issue を作成
+            const issueBody = `## 概要
+
+            Milestone 「${milestone.title}」のタスク分解用 Issue です。
+
+            ## Milestone の説明
+
+            ${milestone.description || '(説明なし)'}
+
+            ---
+
+            ## 使い方
+
+            1. \`@claude [plan]\` をコメントして実装プランを作成
+            2. プランを確認・修正
+            3. \`@claude [breakdown]\` をコメントしてタスクを分解
+
+            分解されたタスクは自動的にこの Milestone に追加されます。
+            `;
+
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Milestone] ${milestone.title} - タスク分解`,
+              body: issueBody,
+              milestone: milestone.number
+            });
+
+            console.log(`Created breakdown issue #${issue.number}: ${issue.html_url}`);

@@ -4,33 +4,62 @@
 
 ## 導入方法
 
-最も簡単で推奨される方法は、インストールスクリプトを使用することです。これにより、必要なファイルがすべて自動で設定されます。
+最も簡単で推奨される方法は、[copier](https://copier.readthedocs.io/) を使用することです。
 
 ---
 
-## インストールスクリプト（推奨）
+## copier によるインストール（推奨）
 
-このスクリプトは、Claude Starter の設定ファイルをリポジトリにダウンロードし、設定します。言語やフレームワークを問わず利用できます。
+### 前提条件
 
-> ⚠️ **セキュリティに関する注意**: `curl | bash` パターンを実行する前に、必ずスクリプトの内容を確認してください。信頼できるソース（公式 GitHub リポジトリの raw content URL）からのみダウンロードしてください。不安な場合は、まずスクリプトをダウンロードして内容を確認してから実行することを推奨します。
->
-> ```bash
-> # スクリプトの内容を確認してから実行する方法
-> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh -o install.sh
-> cat install.sh  # 内容を確認
-> chmod +x install.sh && ./install.sh
-> ```
+- Python 3.10 以上
+- Git 2.27 以上
+
+### copier のインストール
+
+```bash
+# pipx を使用（推奨）
+pipx install copier
+
+# または pip
+pip install copier
+```
 
 ### 実行方法
 
 ターミナルで以下のコマンドを実行してください。
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
+copier copy gh:Javakky/claude-starter .
+```
+
+対話形式で以下の質問に回答します:
+
+| 質問 | 説明 | デフォルト |
+|-----|------|----------|
+| `ref` | GitHub Actions で参照するバージョン | `@master` |
+| `install_claude` | `.claude/` ディレクトリをインストール | `true` |
+| `install_workflows` | GitHub Workflows をインストール | `true` |
+| `install_docs` | `docs/agent/` をインストール | `true` |
+| `install_scripts` | `scripts/` をインストール | `true` |
+
+### インストールオプション
+
+```bash
+# デフォルト値で対話なしインストール
+copier copy gh:Javakky/claude-starter . --defaults
+
+# 特定のバージョン（タグ）を指定
+copier copy gh:Javakky/claude-starter --vcs-ref v1.0.0 .
+
+# Workflows をスキップ
+copier copy gh:Javakky/claude-starter . -d install_workflows=false
+
+# .claude/ をスキップ
+copier copy gh:Javakky/claude-starter . -d install_claude=false
 ```
 
 ### インストールされるファイル
-スクリプトを実行すると、以下のファイルがプロジェクトに配置されます。
 
 ```
 your-project/
@@ -40,32 +69,40 @@ your-project/
 │   └── rules/
 │       ├── 00_scope.md, 10_workflow.md, 20_quality.md, ...
 ├── .github/
-│   ├── actions/
-│   │   ├── prepare-claude-context/ # イベントを解析し、実行を制御する
-│   │   ├── run-claude/             # 実装タスクを実行する
-│   │   ├── run-claude-review/      # レビュータスクを実行する
-│   │   ├── run-claude-plan/        # 実装プランを Issue コメントに投稿する
-│   │   ├── run-claude-breakdown/   # プランを Issue に分解して Project に追加する
-│   │   └── cancel-claude-runs/     # 既存のワークフロー実行をキャンセルする
 │   ├── workflows/
-│   │   ├── claude.yml              # @claude コメントによる実装タスクを実行するWF
-│   │   ├── claude-review.yml       # PRの自動レビューを実行するWF
-│   │   ├── claude-plan.yml         # @claude [plan] によるプラン作成WF
-│   │   ├── claude-breakdown.yml    # @claude [breakdown] によるIssue分解WF
-│   │   ├── claude-milestone.yml    # Milestone作成時にタスク分解用Issueを自動作成するWF
-│   │   └── sync_templates.yml      # .claude/ ディレクトリを更新するWF
+│   │   ├── claude.yml              # @claude コメントによる実装タスクを実行
+│   │   ├── claude-review.yml       # PRの自動レビューを実行
+│   │   ├── claude-plan.yml         # @claude [plan] によるプラン作成
+│   │   ├── claude-breakdown.yml    # @claude [breakdown] によるIssue分解
+│   │   ├── claude-milestone.yml    # Milestone作成時にタスク分解用Issueを自動作成
+│   │   └── sync_templates.yml      # テンプレート同期
 │   ├── pull_request_template.md
 │   └── ISSUE_TEMPLATE/
 │       └── agent_task.md
-├── scripts/
-│   ├── install.sh        # このインストールスクリプト
-│   └── sync_templates.py
 ├── docs/
 │   └── agent/
-│       ├── TASK.md
-│       └── PR.md
-└── CLAUDE.md
+│       ├── TASK.md, PR.md
+│       ├── PLAN_PROMPT.md, BREAKDOWN_PROMPT.md
+├── scripts/
+│   └── sync_templates.py
+├── CLAUDE.md
+└── .copier-answers.yml             # copier の設定（更新時に使用）
 ```
+
+### プロジェクトの更新
+
+テンプレートが更新されたとき、既存プロジェクトを更新:
+
+```bash
+# 変更点を確認しながら更新
+copier update
+
+# 特定バージョンに更新
+copier update --vcs-ref v2.0.0
+```
+
+> `.copier-answers.yml` に前回の回答が保存されているため、同じ質問に再度回答する必要はありません。
+
 ---
 
 ## 必須設定
@@ -74,23 +111,20 @@ your-project/
 
 ### 1. リポジトリシークレットの設定
 
-Claude を動作させるには、APIキー（OAuthトークン）を GitHub リポジトリのシークレットに登録する必要があります。
+Claude を動作させるには、OAuth トークンを GitHub リポジトリのシークレットに登録する必要があります。
 
-1.  リポジトリの `Settings` > `Secrets and variables` > `Actions` に移動します。
-2.  `New repository secret` をクリックします。
-3.  **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
-4.  **Value**: あなたの Claude Code OAuth トークンを入力します。
+1. リポジトリの `Settings` > `Secrets and variables` > `Actions` に移動します。
+2. `New repository secret` をクリックします。
+3. **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
+4. **Value**: あなたの Claude Code OAuth トークンを入力します。
 
 ### 2. ワークフローのカスタマイズ
 
-`claude.yml` は、Claude にコード生成や修正を指示するためのワークフローです。プロジェクトの技術スタックに合わせて、このファイルの環境設定部分を編集する必要があります。
-
-例えば、Node.js プロジェクトの場合、`npm install` を実行するステップを追加します。
+`claude.yml` は、Claude にコード生成や修正を指示するためのワークフローです。プロジェクトの技術スタックに合わせて、環境設定部分を編集してください。
 
 #### `.github/workflows/claude.yml` のカスタマイズ例
 
 ```yaml
-# ...
       # --- プロジェクトの環境設定をここに追加 ---
       # 例: Node.js
       # - name: Set up Node.js
@@ -105,9 +139,8 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
       - name: Run Claude (implement)
         if: steps.prep.outputs.should_run == 'true'
-        uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
+        uses: Javakky/claude-starter/.github/actions/run-claude@master
         with:
-          # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
           comment_body: ${{ steps.prep.outputs.comment_body }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 必要に応じてデフォルト値をオーバーライド
@@ -122,7 +155,7 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ## Composite Actions の詳細
 
-`claude-starter` は、ワークフローのロジックをカプセル化するために、いくつかの Composite Actions を提供します。
+`claude-starter` は、ワークフローのロジックをカプセル化するために、いくつかの Composite Actions を提供します。これらは `Javakky/claude-starter/.github/actions/` から参照されます。
 
 ### `prepare-claude-context`
 
@@ -225,9 +258,7 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ## プロンプトのカスタマイズ
 
-`run-claude-plan` と `run-claude-breakdown` は `docs/agent/` にあるプロンプトファイルを参照します。プロジェクトに合わせてカスタマイズしてください。
-
-### プロンプトファイル
+`run-claude-plan` と `run-claude-breakdown` は `docs/agent/` にあるプロンプトファイルを参照します。
 
 | ファイル | 説明 |
 |---|---|
@@ -236,43 +267,7 @@ Claude を動作させるには、APIキー（OAuthトークン）を GitHub リ
 
 ### プレースホルダー
 
-プロンプトファイル内で以下のプレースホルダーが使用できます：
-
 | プレースホルダー | 説明 |
 |---|---|
 | `{{ISSUE_NUMBER}}` | 対象の Issue 番号 |
 | `{{MILESTONE_TITLE}}` | Milestone タイトル（breakdown のみ） |
-
----
-
-## 手動での導入
-
-インストールスクリプトを使わずに、必要なファイルを手動でリポジトリに配置することも可能です。
-
-### 1. 必要なファイルをコピーする
-
-`claude-starter` リポジトリから、以下のディレクトリとファイルをあなたのプロジェクトにコピーします。
-
--   `.claude/` (ディレクトリ全体)
--   `.github/actions/` (ディレクトリ全体)
--   `examples/.github/workflows/claude.yml.template` を `.github/workflows/claude.yml` としてコピー
--   `examples/.github/workflows/claude-review.yml.template` を `.github/workflows/claude-review.yml` としてコピー
--   `examples/.github/workflows/claude-plan.yml.template` を `.github/workflows/claude-plan.yml` としてコピー
--   `examples/.github/workflows/claude-breakdown.yml.template` を `.github/workflows/claude-breakdown.yml` としてコピー
--   `examples/.github/workflows/claude-milestone.yml.template` を `.github/workflows/claude-milestone.yml` としてコピー
-
-### 2. ワークフローを調整する
-
-コピーした `.github/workflows/claude.yml` と `claude-review.yml` を開き、`uses:` のパスを調整します。
-
-`@@REF@@` の部分を、使用したい `claude-starter` のブランチ名やタグ（例: `@master`）に置き換えるか、ローカルのアクションを参照するように変更します。
-
-**変更前:**
-`uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@`
-
-**変更後 (ローカル参照):**
-`uses: ./.github/actions/prepare-claude-context`
-
-### 3. 必須設定を行う
-
-上記「必須設定」セクションの指示に従い、`CLAUDE_CODE_OAUTH_TOKEN` の設定と、ワークフローのカスタマイズを行ってください。
