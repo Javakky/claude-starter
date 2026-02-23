@@ -13,6 +13,8 @@ _skip_if_exists:
 # 条件分岐による除外
 _exclude:
   - "{% if not install_claude %}.claude{% endif %}"
+  - "{% if not install_claude %}.github/workflows/claude*.yml{% endif %}"
+  - "{% if not install_codex %}.github/workflows/codex*.yml{% endif %}"
   - "{% if not install_workflows %}.github/workflows{% endif %}"
   - "{% if not install_docs %}docs{% endif %}"
   - "{% if not install_scripts %}scripts{% endif %}"
@@ -37,6 +39,13 @@ install_claude:
   help: |
     .claude/ ディレクトリをインストールしますか？
     （rules/ と commands/ が含まれます）
+  default: true
+
+install_codex:
+  type: bool
+  help: |
+    Codex 用の Workflows をインストールしますか？
+    （codex.yml, codex-review.yml など）
   default: true
 
 install_workflows:

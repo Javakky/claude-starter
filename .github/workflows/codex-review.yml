@@ -1,0 +1,82 @@
+name: Codex Review
+run-name: "codex-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: write
+  id-token: write
+
+concurrency:
+  group: >-
+    codex-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+    -${{ github.event_name == 'pull_request' && 'pr' || 'comment' }}
+    -${{ github.event_name == 'issue_comment' && (github.event.comment.user.type == 'Bot' && 'bot' || 'user') || 'na' }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ローカル actions を使うための checkout
+      - name: Checkout repository to access local actions
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare context
+        id: prep
+        uses: Javakky/claude-starter/.github/actions/prepare-codex-context@master
+        with:
+          mode: "review"
+          # implement-running gate 用（あなたの implement workflow ファイル名に合わせる）
+          impl_workflow_id: codex.yml
+
+          # pr-sync skip rules
+          skip_commit_prefixes: "docs:,style:,chore:,wip:"
+          allow_final_sync_during_impl: "true"
+          # senderがBotじゃないケースに備えるなら marker を入れる（運用でCodex最終commitに付ける）
+          final_sync_commit_marker: "[codex-final]"
+
+          allowed_comment_permissions: "admin,maintain,write"
+          max_workflow_runs_to_scan: "50"
+
+      # prepare が skip の場合はここで終了
+      - name: Stop early if skipped
+        if: steps.prep.outputs.should_run != 'true'
+        run: |
+          echo "Skipping review: ${{ steps.prep.outputs.reason }}"
+
+      # Review は PR context が必須（pull_request or PR conversation comment）
+      - name: Fail fast if PR context missing
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number == ''
+        run: |
+          echo "PR context is required for review but pr_number is empty."
+          exit 1
+
+      # レビュー対象の head_sha/head_ref を checkout（正しい差分をレビューするため）
+      - name: Checkout PR head
+        if: steps.prep.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.prep.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Run Codex Review
+        if: steps.prep.outputs.should_run == 'true'
+        uses: Javakky/claude-starter/.github/actions/run-codex-review@master
+        with:
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY || secrets.AZURE_OPENAI_API_KEY }}
+          responses_api_endpoint: ${{ vars.RESPONSES_API_ENDPOINT }}
+          # 必要なら上書き
+          # model: 'haiku'
+          # max_turns: '30'
+          # prompt: '/review'

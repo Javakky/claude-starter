@@ -1,0 +1,87 @@
+name: "Run Codex"
+description: "Resolves options from issue comments and runs openai/codex-action"
+
+inputs:
+  comment_body:
+    description: "The body of the comment that triggered the workflow"
+    required: true
+  openai_api_key:
+    description: "OpenAI or Azure OpenAI API key"
+    required: true
+  responses_api_endpoint:
+    description: "Optional Responses API endpoint (for Azure, etc.)"
+    required: false
+    default: ""
+  default_model:
+    description: "Default model"
+    required: false
+    default: "gpt-5-codex"
+  default_effort:
+    description: "Default effort"
+    required: false
+    default: "medium"
+  default_max_turns:
+    description: "Default max turns"
+    required: false
+    default: "100"
+  codex_args:
+    description: "Additional codex exec args"
+    required: false
+    default: ""
+  sandbox:
+    description: "Codex sandbox mode"
+    required: false
+    default: "workspace-write"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check trigger condition
+      id: trigger
+      shell: bash
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
+      run: |
+        if [[ "$COMMENT_BODY" =~ "@codex" ]]; then
+          echo "triggered=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Comment does not contain '@codex'. Skipping."
+          echo "triggered=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Resolve Codex options
+      if: steps.trigger.outputs.triggered == 'true'
+      id: opts
+      uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
+      with:
+        script: |
+          const body = process.env.COMMENT_BODY || "";
+
+          const modelMatch = body.match(/\[model=([^\]]+)\]/i);
+          const effortMatch = body.match(/\[effort=(low|medium|high)\]/i);
+          const turnsMatch = body.match(/\[(?:turns|max-turns)=(\d+)\]/i);
+
+          const model = modelMatch ? modelMatch[1].trim() : "${{ inputs.default_model }}";
+          const effort = effortMatch ? effortMatch[1].toLowerCase().trim() : "${{ inputs.default_effort }}";
+          const maxTurns = turnsMatch ? Number(turnsMatch[1]) : Number("${{ inputs.default_max_turns }}");
+
+          core.setOutput("model", model);
+          core.setOutput("effort", effort);
+          core.setOutput("max_turns", String(maxTurns));
+
+    - name: Run Codex Action
+      if: steps.trigger.outputs.triggered == 'true'
+      uses: openai/codex-action@v1
+      with:
+        openai-api-key: ${{ inputs.openai_api_key }}
+        responses-api-endpoint: ${{ inputs.responses_api_endpoint }}
+        sandbox: ${{ inputs.sandbox }}
+        safety-strategy: drop-sudo
+        prompt: ${{ inputs.comment_body }}
+        model: ${{ steps.opts.outputs.model }}
+        effort: ${{ steps.opts.outputs.effort }}
+        codex-args: >-
+          --max-turns ${{ steps.opts.outputs.max_turns }}
+          ${{ inputs.codex_args }}

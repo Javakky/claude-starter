@@ -5,6 +5,7 @@ _commit: master
 _src_path: gh:Javakky/claude-starter
 ref: "@master"
 install_claude: true
+install_codex: true
 install_workflows: true
 install_docs: true
 install_scripts: true

@@ -5,7 +5,7 @@ Issue #{{ISSUE_NUMBER}} の実装プランを並行作業可能な粒度で分�
 ## フェーズ1: プラン取得
 
 `gh issue view {{ISSUE_NUMBER}} --comments` で Issue 本文とコメント一覧を取得し、
-claude[bot] が投稿した最新の「## 実装プラン」を含むコメントを特定する。
+claude[bot] または codex 系アクター が投稿した最新の「## 実装プラン」を含むコメントを特定する。
 
 ## フェーズ2: タスク草案を作る（Issue はまだ作成しない）
 

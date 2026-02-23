@@ -1,0 +1,61 @@
+name: Codex Plan
+run-name: "codex-plan issue #${{ github.event.issue.number }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: >-
+    codex-plan-${{ github.event.issue.number }}
+    -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: |
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '@codex') &&
+      contains(github.event.comment.body, '[plan]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository to access local actions
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare context
+        id: prep
+        uses: Javakky/claude-starter/.github/actions/prepare-codex-context@master
+        with:
+          mode: "plan"
+          impl_workflow_id: codex.yml # ←implement ワークフローのファイル名に合わせる
+          allowed_comment_permissions: "admin,maintain,write"
+          max_workflow_runs_to_scan: "50"
+
+      - name: Debug prepare outputs
+        run: |
+          echo "should_run=${{ steps.prep.outputs.should_run }}"
+          echo "reason=${{ steps.prep.outputs.reason }}"
+          echo "trigger_kind=${{ steps.prep.outputs.trigger_kind }}"
+          echo "issue_number=${{ steps.prep.outputs.issue_number }}"
+          echo "issue_url=${{ steps.prep.outputs.issue_url }}"
+
+      - name: Run Codex (plan)
+        if: steps.prep.outputs.should_run == 'true'
+        uses: Javakky/claude-starter/.github/actions/run-codex-plan@master
+        with:
+          comment_body: ${{ steps.prep.outputs.comment_body }}
+          issue_number: ${{ steps.prep.outputs.issue_number }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY || secrets.AZURE_OPENAI_API_KEY }}
+          responses_api_endpoint: ${{ vars.RESPONSES_API_ENDPOINT }}
+          # 必要に応じてデフォルト値をオーバーライド
+          # default_model: 'opus'
+          # default_max_turns: 50
+

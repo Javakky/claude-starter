@@ -1,0 +1,90 @@
+name: Codex Implement
+run-name: "codex-impl issue #${{ github.event.issue.number }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+  id-token: write
+
+concurrency:
+  group: >-
+    codex-impl-${{ github.event.issue.number }}
+    -${{ contains(github.event.comment.body, '[review]') && 'review' || 'implement' }}
+    -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
+  cancel-in-progress: true
+
+jobs:
+  impl:
+    if: |
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '@codex') &&
+      !contains(github.event.comment.body, '[review]') &&
+      !contains(github.event.comment.body, '[plan]') &&
+      !contains(github.event.comment.body, '[breakdown]')
+    runs-on: ubuntu-latest
+    steps:
+      # ローカル action を読むために checkout は必要
+      # ここではデフォルトブランチを取る（issue起点 implement は Codex 側がブランチ作成する想定）
+      - name: Checkout repository to access local actions
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare context
+        id: prep
+        uses: Javakky/claude-starter/.github/actions/prepare-codex-context@master
+        with:
+          mode: "implement"
+          impl_workflow_id: codex.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
+
+      # PR上の@codex(implement)であれば、そのPRの review を止めたい（任意）
+      - name: Cancel running reviews for this PR
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
+        uses: Javakky/claude-starter/.github/actions/cancel-codex-runs@master
+        with:
+          workflow_id: codex-review.yml
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          head_ref: ${{ steps.prep.outputs.head_ref }}
+          head_sha: ${{ steps.prep.outputs.head_sha }}
+
+      # PR conversation から呼ばれた場合だけ、そのブランチへ checkout し直す
+      - name: Checkout PR head branch (PR conversation only)
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.prep.outputs.head_ref }}
+          fetch-depth: 0
+
+      # --- プロジェクトの環境設定をここに追加 ---
+      # 例: Node.js
+      # - name: Set up Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20'
+      #     cache: 'npm'
+      #
+      # - name: Install dependencies
+      #   run: npm install
+      # ------------------------------------
+
+      - name: Run Codex (implement)
+        if: steps.prep.outputs.should_run == 'true'
+        uses: Javakky/claude-starter/.github/actions/run-codex@master
+        with:
+          # Issue起点でもPR起点でも、@codex を含む本文がそのままCodexに渡る
+          comment_body: ${{ steps.prep.outputs.comment_body }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY || secrets.AZURE_OPENAI_API_KEY }}
+          responses_api_endpoint: ${{ vars.RESPONSES_API_ENDPOINT }}
+          # 必要に応じてデフォルト値をオーバーライド
+          # default_model: 'opus'
+          # default_max_turns: 20
+          # allowed_tools: |
+          #   Bash(npm run lint)
+          #   Bash(npm run test)
+

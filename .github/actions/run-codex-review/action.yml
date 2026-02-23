@@ -1,0 +1,67 @@
+name: "Run Codex Review"
+description: "Runs Codex for PR review and posts the result as a PR comment"
+
+inputs:
+  pr_number:
+    description: "Pull request number"
+    required: true
+  openai_api_key:
+    description: "OpenAI or Azure OpenAI API key"
+    required: true
+  responses_api_endpoint:
+    description: "Optional Responses API endpoint (for Azure, etc.)"
+    required: false
+    default: ""
+  model:
+    description: "Model"
+    required: false
+    default: "gpt-5-codex"
+  effort:
+    description: "Effort"
+    required: false
+    default: "medium"
+  max_turns:
+    description: "Max turns"
+    required: false
+    default: "30"
+  prompt:
+    description: "Review prompt"
+    required: false
+    default: "/review"
+  codex_args:
+    description: "Additional codex exec args"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run Codex Review
+      id: codex
+      uses: openai/codex-action@v1
+      with:
+        openai-api-key: ${{ inputs.openai_api_key }}
+        responses-api-endpoint: ${{ inputs.responses_api_endpoint }}
+        sandbox: workspace-write
+        safety-strategy: drop-sudo
+        prompt: ${{ inputs.prompt }}
+        model: ${{ inputs.model }}
+        effort: ${{ inputs.effort }}
+        codex-args: >-
+          --max-turns ${{ inputs.max_turns }}
+          ${{ inputs.codex_args }}
+
+    - name: Post review comment
+      if: steps.codex.outputs.final-message != ''
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+      with:
+        script: |
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: Number(process.env.PR_NUMBER),
+            body: process.env.CODEX_FINAL_MESSAGE,
+          });
