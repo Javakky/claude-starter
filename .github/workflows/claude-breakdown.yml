@@ -32,7 +32,7 @@ jobs:
 
       - name: Prepare context
         id: prep
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@master
         with:
           mode: "breakdown"
           impl_workflow_id: claude.yml # implement ワークフローのファイル名に合わせる
@@ -51,7 +51,7 @@ jobs:
 
       - name: Run Claude (breakdown)
         if: steps.prep.outputs.should_run == 'true'
-        uses: Javakky/claude-starter/.github/actions/run-claude-breakdown@@REF@@
+        uses: Javakky/claude-starter/.github/actions/run-claude-breakdown@master
         with:
           comment_body: ${{ steps.prep.outputs.comment_body }}
           issue_number: ${{ steps.prep.outputs.issue_number }}
@@ -61,3 +61,4 @@ jobs:
           # 必要に応じてデフォルト値をオーバーライド
           # default_model: 'opus'
           # default_max_turns: 100
+

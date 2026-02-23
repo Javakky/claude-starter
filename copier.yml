@@ -1,0 +1,61 @@
+# Claude Starter - copier テンプレート設定
+# https://copier.readthedocs.io/
+
+_min_copier_version: "9.0.0"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+
+# ユーザーがカスタマイズした可能性があるファイルは上書きしない
+_skip_if_exists:
+  - ".claude/rules/*"
+  - "CLAUDE.md"
+
+# 条件分岐による除外
+_exclude:
+  - "{% if not install_claude %}.claude{% endif %}"
+  - "{% if not install_workflows %}.github/workflows{% endif %}"
+  - "{% if not install_docs %}docs{% endif %}"
+  - "{% if not install_scripts %}scripts{% endif %}"
+  - "copier.yml"
+  - "README.md"
+  - "**/*.local.json"
+  - "**/.DS_Store"
+
+# =============================================================================
+# 質問定義
+# =============================================================================
+
+ref:
+  type: str
+  help: |
+    GitHub Actions で参照するバージョンを指定してください。
+    例: @master, @v1.0.0
+  default: "@master"
+
+install_claude:
+  type: bool
+  help: |
+    .claude/ ディレクトリをインストールしますか？
+    （rules/ と commands/ が含まれます）
+  default: true
+
+install_workflows:
+  type: bool
+  help: |
+    GitHub Workflows をインストールしますか？
+    （claude.yml, claude-review.yml など）
+  default: true
+
+install_docs:
+  type: bool
+  help: |
+    docs/agent/ ディレクトリをインストールしますか？
+    （TASK.md, PR.md, PLAN_PROMPT.md, BREAKDOWN_PROMPT.md）
+  default: true
+
+install_scripts:
+  type: bool
+  help: |
+    scripts/ ディレクトリをインストールしますか？
+    （sync_templates.py）
+  default: true

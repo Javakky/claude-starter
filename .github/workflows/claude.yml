@@ -38,7 +38,7 @@ jobs:
 
       - name: Prepare context
         id: prep
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@@REF@@
+        uses: Javakky/claude-starter/.github/actions/prepare-claude-context@master
         with:
           mode: "implement"
           impl_workflow_id: claude.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
@@ -46,7 +46,7 @@ jobs:
       # PR上の@claude(implement)であれば、そのPRの review を止めたい（任意）
       - name: Cancel running reviews for this PR
         if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
-        uses: Javakky/claude-starter/.github/actions/cancel-claude-runs@@REF@@
+        uses: Javakky/claude-starter/.github/actions/cancel-claude-runs@master
         with:
           workflow_id: claude-review.yml
           pr_number: ${{ steps.prep.outputs.pr_number }}
@@ -75,7 +75,7 @@ jobs:
 
       - name: Run Claude (implement)
         if: steps.prep.outputs.should_run == 'true'
-        uses: Javakky/claude-starter/.github/actions/run-claude@@REF@@
+        uses: Javakky/claude-starter/.github/actions/run-claude@master
         with:
           # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
           comment_body: ${{ steps.prep.outputs.comment_body }}
@@ -86,3 +86,4 @@ jobs:
           # allowed_tools: |
           #   Bash(npm run lint)
           #   Bash(npm run test)
+

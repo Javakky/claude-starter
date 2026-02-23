@@ -14,37 +14,63 @@ GitHub Actions と Claude Code を組み合わせ、Issue や Pull Request を�
 
 ## 🚀 クイックスタート
 
-以下のコマンドを実行するだけで、必要な設定ファイル一式がリポジトリに配置されます。
+### 1. 前提条件
+
+- Python 3.10 以上
+- copier: `pipx install copier` または `pip install copier`
+
+### 2. インストール
+
+お使いのリポジトリのルートディレクトリで、以下のコマンドを実行します。
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash
+copier copy gh:Javakky/claude-starter .
 ```
 
-> 🔄 **Update**: 既に導入済みで最新版に更新したい場合は、`-f` オプションを使用してください。
-> ```bash
-> curl -sL https://raw.githubusercontent.com/Javakky/claude-starter/master/scripts/install.sh | bash -s -- -f
-> ```
+対話形式でいくつかの質問に回答すると、必要なファイルが配置されます。
 
----
+```bash
+# 特定バージョンを指定する場合
+copier copy gh:Javakky/claude-starter --vcs-ref v1.0.0 .
+
+# デフォルト設定で対話なしインストール
+copier copy gh:Javakky/claude-starter . --defaults
+```
 
 ## 🔑 セットアップ
 
 利用には **Claude App** の導入と **Claude Code OAuth Token** が必要です。
 
-### 1️⃣ GitHub App の導入
+### 1. GitHub App の導入
 GitHub 上で **[Claude App](https://github.com/apps/claude)** をリポジトリに追加してください。これを行わないと、Claude が Issue や PR に反応できません。
 
-### 2️⃣ トークンの取得
+### 2. トークンの取得
 ターミナルで以下のコマンドを実行し、ブラウザ認証を行ってください。
 ```bash
 claude login
 ```
 ※ 未インストールの場合は `npm install -g @anthropic-ai/claude-code` でインストールしてください。
 
-### 3️⃣ GitHub Secrets への登録
-リポジトリの `Settings` > `Secrets and variables` > `Actions` にて、以下のシークレットを登録します。
-*   **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
-*   **Value**: 手順2で取得したトークン
+### 3. GitHub Secrets への登録
+リポジトリの `Settings` > `Secrets and variables` > `Actions` に移動し、以下のシークレットを登録します。
+
+- **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
+- **Value**: あなたの Claude Code OAuth トークンを入力します。
+
+### 4. 試してみる
+Issueを作成し、`@claude こんにちは！` とコメントして、Claudeが応答するか確認してみましょう。
+
+### 5. テンプレートの更新
+
+テンプレートが更新されたとき、既存プロジェクトを更新できます。
+
+```bash
+copier update
+```
+
+---
+
+より詳細な設定やカスタマイズ方法については、[**インストールガイド (INSTALLATION.md)**](docs/INSTALLATION.md) を参照してください。
 
 ---
 
@@ -77,18 +103,7 @@ claude login
     *   🛠️ 修正指示: `@claude <修正内容>`
     *   🔄 再レビュー: `@claude [review]`
 
----
-
-## ⚙️ カスタマイズ (.claude/)
-
-`.claude/` ディレクトリ内のファイルを編集することで、AIの挙動を制御できます。
-
-| ディレクトリ | 説明 |
-| :--- | :--- |
-| 📂 **`.claude/rules/`** | プロジェクト固有のルール（コーディング規約、設計指針など）を記述します。AIはこれを参照してコードを書きます。 |
-| 📂 **`.claude/commands/`** | 各コマンド実行時の追加プロンプトなどを記述します。 |
-
-詳細な構成については [**インストールガイド (docs/INSTALLATION.md)**](docs/INSTALLATION.md) を参照してください。
+--- 
 
 ## 💬 コマンドオプション
 
