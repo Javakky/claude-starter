@@ -38,7 +38,7 @@ install_claude:
   type: bool
   help: |
     .claude/ ディレクトリをインストールしますか？
-    （rules/ と commands/ が含まれます）
+    （rules/ と skills/ が含まれます）
   default: true
 
 install_codex:
