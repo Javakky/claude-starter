@@ -16,10 +16,25 @@
 - タスク: `docs/agent/TASK.md`
 - PR本文: `docs/agent/PR.md`
 
-## よく使うコマンド
-- 分解: `/project:orchestrator`
-- 実装: `/project:implement`
-- CI修正: `/project:fix_ci`
+## スキル（自動選択）
+Claude が必要に応じて自動的に使用。
+
+**タスク開始**（排他）
+- `/orchestrator` - 新規タスク・機能追加の計画
+- `/debug` - バグ調査・問題の原因特定
+
+**実装**
+- `/implement` - コード実装 + PR本文作成
+
+**検証**
+- `/test-generate` - テストコード生成
+- `/fix_ci` - CI エラー修正
+
+**改善**
+- `/refactor` - リファクタリング
+
+**レビュー**
+- `/review` - コードレビュー（ビルトイン、セキュリティチェック含む）
 
 ## Conventional Commits
 
