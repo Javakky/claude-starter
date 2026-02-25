@@ -342,16 +342,16 @@ runs:
           let triggerKind = 'none';
           if (hasReview) {
             triggerKind = 'comment-review';
-            if (mode !== 'review') return skip('mode-mismatch:want-review', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            if (mode !== 'review') return skip('mode-mismatch:want-review', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           } else if (hasPlan) {
             triggerKind = 'comment-plan';
-            if (mode !== 'plan') return skip('mode-mismatch:want-plan', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            if (mode !== 'plan') return skip('mode-mismatch:want-plan', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           } else if (hasBreakdown) {
             triggerKind = 'comment-breakdown';
-            if (mode !== 'breakdown') return skip('mode-mismatch:want-breakdown', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            if (mode !== 'breakdown') return skip('mode-mismatch:want-breakdown', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           } else {
             triggerKind = 'comment-implement';
-            if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            if (mode !== 'implement') return skip('mode-mismatch:want-implement', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           }
 
           // 実装はコメント者に事前指定された以上の権限がないなら発火しない
@@ -362,23 +362,23 @@ runs:
           });
           const perm = String(permResp.data?.permission || '').toLowerCase();
           if (!allowedPerms.has(perm)) {
-            return skip(`unauthorized:${perm}`, { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            return skip(`unauthorized:${perm}`, { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           }
 
           const isPrConversation = !!issue?.pull_request;
 
           // issue 上でのレビューはサポートしていない
           if (mode === 'review' && !isPrConversation) {
-            return skip('comment-review-on-issue-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+            return skip('comment-review-on-issue-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
           }
 
           if (isPrConversation) {
             // plan / breakdown は Issue コメントのみ対応（PR コメントは非サポート）
             if (triggerKind === 'comment-plan') {
-              return skip('plan-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+              return skip('plan-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
             }
             if (triggerKind === 'comment-breakdown') {
-              return skip('breakdown-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+              return skip('breakdown-on-pr-not-supported', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
             }
 
             // GitHub では issue と PR の番号は通しなので同じように扱える
@@ -398,17 +398,17 @@ runs:
               const isFork = fullName !== `${context.repo.owner}/${context.repo.repo}`;
               // fork や branch が既に削除された PR に実装は追加しない
               if (isFork) {
-                return skip('fork-pr-skip', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
+                return skip('fork-pr-skip', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
               }
               if (!headRef) {
-                return skip('no-head-ref', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
+                return skip('no-head-ref', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
               }
 
               // 実装タスクの実行中はレビューをスキップする
               if (mode === 'review') {
                 const implementing = await isImplementRunning({ prNumber, headRef, headSha });
                 if (implementing) {
-                  return skip('implement-running', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind });
+                  return skip('implement-running', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
                 }
               }
 
@@ -423,7 +423,7 @@ runs:
                 mention_type: mentionType,
               });
             } catch (e) {
-              return skip(`failed-get-pr:${e.message}`, { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
+              return skip(`failed-get-pr:${e.message}`, { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
             }
           }
           
@@ -447,7 +447,7 @@ runs:
               } catch (e) {
                 core.warning(`Failed to post warning comment: ${e.message}`);
               }
-              return skip('breakdown-requires-milestone', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind });
+              return skip('breakdown-requires-milestone', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
             }
 
             // milestone 情報を出力に含める
