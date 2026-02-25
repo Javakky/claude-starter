@@ -76,6 +76,10 @@ outputs:
     description: "Milestone title (breakdown モードで Issue に milestone が紐付いている場合)"
     value: ${{ steps.ctx.outputs.milestone_title }}
 
+  mention_type:
+    description: "メンションの種類（claude または codex）"
+    value: ${{ steps.ctx.outputs.mention_type }}
+
 runs:
   using: "composite"
   steps:
@@ -142,6 +146,8 @@ runs:
 
             core.setOutput('milestone_number', obj.milestone_number ? String(obj.milestone_number) : '');
             core.setOutput('milestone_title', obj.milestone_title || '');
+
+            core.setOutput('mention_type', obj.mention_type || '');
           }
 
           const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
@@ -321,12 +327,15 @@ runs:
 
           const normalized = commentBody.replaceAll('＠', '@').toLowerCase();
           const hasClaude = normalized.includes('@claude');
+          const hasCodex = normalized.includes('@codex');
+          const hasMention = hasClaude || hasCodex;
+          const mentionType = hasClaude ? 'claude' : hasCodex ? 'codex' : '';
           const hasReview = normalized.includes('[review]');
           const hasPlan = normalized.includes('[plan]');
           const hasBreakdown = normalized.includes('[breakdown]');
 
-          if (!hasClaude) {
-            return skip('no-@claude', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
+          if (!hasMention) {
+            return skip('no-mention', { issue_number: issueNumber, issue_url: issueUrl, comment_body: commentBody });
           }
 
           // TODO: より先頭で判定した方がよさそう
@@ -411,6 +420,7 @@ runs:
                 head_ref: headRef,
                 comment_body: commentBody,
                 trigger_kind: triggerKind,
+                mention_type: mentionType,
               });
             } catch (e) {
               return skip(`failed-get-pr:${e.message}`, { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind });
@@ -449,6 +459,7 @@ runs:
               head_ref: '',
               comment_body: commentBody,
               trigger_kind: triggerKind,
+              mention_type: mentionType,
               milestone_number: milestone.number,
               milestone_title: milestone.title,
             });
@@ -462,4 +473,5 @@ runs:
             head_ref: '',
             comment_body: commentBody,
             trigger_kind: triggerKind,
+            mention_type: mentionType,
           });
