@@ -11,6 +11,14 @@ inputs:
   claude_code_oauth_token:
     description: "Claude Code OAuth Token"
     required: true
+  codex_code_oauth_token:
+    description: "Codex Code OAuth Token（mention_type が codex の場合に使用）"
+    required: false
+    default: ""
+  mention_type:
+    description: "メンションの種類（claude または codex）"
+    required: false
+    default: "claude"
   default_model:
     description: "Default Claude model"
     required: false
@@ -33,10 +41,10 @@ runs:
       env:
         COMMENT_BODY: ${{ inputs.comment_body }}
       run: |
-        if [[ "$COMMENT_BODY" =~ "@claude" ]]; then
+        if [[ "$COMMENT_BODY" =~ @(claude|codex) ]]; then
           echo "triggered=true" >> $GITHUB_OUTPUT
         else
-          echo "Comment does not contain '@claude'. Skipping."
+          echo "Comment does not contain '@claude' or '@codex'. Skipping."
           echo "triggered=false" >> $GITHUB_OUTPUT
         fi
 
@@ -81,7 +89,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}
@@ -91,7 +99,7 @@ runs:
       if: steps.trigger.outputs.triggered == 'true' && (inputs.github_token == '' || inputs.github_token == null)
       uses: anthropics/claude-code-action@v1
       with:
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}

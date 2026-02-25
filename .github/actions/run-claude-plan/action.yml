@@ -14,6 +14,14 @@ inputs:
   claude_code_oauth_token:
     description: "Claude Code OAuth Token"
     required: true
+  codex_code_oauth_token:
+    description: "Codex Code OAuth Token（mention_type が codex の場合に使用）"
+    required: false
+    default: ""
+  mention_type:
+    description: "メンションの種類（claude または codex）"
+    required: false
+    default: "claude"
   default_model:
     description: "デフォルトの Claude モデル"
     required: false
@@ -90,7 +98,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
         prompt: ${{ steps.prompt.outputs.content }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
@@ -102,7 +110,7 @@ runs:
       if: inputs.github_token == '' || inputs.github_token == null
       uses: anthropics/claude-code-action@v1
       with:
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
         prompt: ${{ steps.prompt.outputs.content }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
