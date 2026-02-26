@@ -28,6 +28,14 @@ inputs:
     description: "Issue/PR 番号（Codex のコメント投稿に使用）"
     required: false
     default: ""
+  pr_number:
+    description: "PR 番号（Codex の PR コンテキスト取得に使用）"
+    required: false
+    default: ""
+  head_ref:
+    description: "PR の head ブランチ名（Codex のブランチリンク表示に使用）"
+    required: false
+    default: ""
   default_model:
     description: "Default Claude model"
     required: false
@@ -134,4 +142,8 @@ runs:
         github_token: ${{ inputs.github_token }}
         prompt: ${{ inputs.comment_body }}
         issue_number: ${{ inputs.issue_number }}
+        pr_number: ${{ inputs.pr_number }}
+        head_ref: ${{ inputs.head_ref }}
         auto_commit: "true"
+        # Issue 起点（PR なし）の場合はブランチを作成
+        create_branch: ${{ inputs.pr_number == '' && 'true' || 'false' }}

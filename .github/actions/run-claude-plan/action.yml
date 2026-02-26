@@ -145,4 +145,5 @@ runs:
         github_token: ${{ inputs.github_token }}
         prompt: ${{ steps.prompt.outputs.content }}
         issue_number: ${{ inputs.issue_number }}
+        # plan は Issue コンテキストのみ（PR なし）
         auto_commit: "false"

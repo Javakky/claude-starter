@@ -21,10 +21,26 @@ inputs:
     description: "コメントを投稿する Issue/PR 番号（空の場合はコメント投稿をスキップ）"
     required: false
     default: ""
+  pr_number:
+    description: "PR 番号（PR コンテキストの取得に使用。空の場合は Issue コンテキスト）"
+    required: false
+    default: ""
+  head_ref:
+    description: "PR の head ブランチ名（ブランチリンク表示に使用）"
+    required: false
+    default: ""
   auto_commit:
     description: "Codex 実行後にコード変更を自動コミット・プッシュするか"
     required: false
     default: "true"
+  create_branch:
+    description: "実行前に新しいブランチを作成するか（Issue 起点の実装で使用）"
+    required: false
+    default: "false"
+  branch_prefix:
+    description: "作成するブランチの接頭辞"
+    required: false
+    default: "codex/"
 
 runs:
   using: "composite"
@@ -41,7 +57,101 @@ runs:
           exit 1
         fi
 
-    # 2. 進捗コメントの投稿
+    # 2. Git ユーザー設定（Codex が内部で git 操作する可能性があるため、実行前に設定）
+    - name: Configure git user
+      shell: bash
+      run: |
+        git config user.name "codex[bot]"
+        git config user.email "codex[bot]@users.noreply.github.com"
+
+    # 3. ブランチ作成（Issue 起点の実装時）
+    - name: Create branch for issue
+      if: inputs.create_branch == 'true' && inputs.issue_number != ''
+      id: branch
+      shell: bash
+      env:
+        BRANCH_PREFIX: ${{ inputs.branch_prefix }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M)
+        BRANCH_NAME="${BRANCH_PREFIX}issue-${ISSUE_NUMBER}-${TIMESTAMP}"
+        echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+
+        git checkout -b "$BRANCH_NAME"
+        echo "ブランチ '${BRANCH_NAME}' を作成しました"
+
+    # 4. PR/Issue コンテキストの収集
+    - name: Collect context
+      id: context
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        ORIGINAL_PROMPT: ${{ inputs.prompt }}
+      run: |
+        CONTEXT=""
+
+        # PR コンテキストの取得
+        if [ -n "$PR_NUMBER" ] && [ -n "$GH_TOKEN" ]; then
+          echo "PR #${PR_NUMBER} のコンテキストを取得中..."
+
+          # PR の概要取得
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json title,body --jq '"# PR #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>/dev/null || echo "")
+          if [ -n "$PR_BODY" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- PR 概要 ---
+        ${PR_BODY}"
+          fi
+
+          # PR の差分取得（最大 5000 行に制限）
+          PR_DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -5000 || echo "")
+          if [ -n "$PR_DIFF" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- PR 差分 ---
+        ${PR_DIFF}"
+          fi
+
+          # PR の変更ファイル一覧
+          PR_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>/dev/null || echo "")
+          if [ -n "$PR_FILES" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- 変更ファイル一覧 ---
+        ${PR_FILES}"
+          fi
+
+        # Issue コンテキストの取得（PR でない場合）
+        elif [ -n "$ISSUE_NUMBER" ] && [ -n "$GH_TOKEN" ]; then
+          echo "Issue #${ISSUE_NUMBER} のコンテキストを取得中..."
+
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body --jq '"# Issue #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>/dev/null || echo "")
+          if [ -n "$ISSUE_BODY" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- Issue 概要 ---
+        ${ISSUE_BODY}"
+          fi
+        fi
+
+        # コンテキスト付きプロンプトを構築
+        if [ -n "$CONTEXT" ]; then
+          ENRICHED_PROMPT="${ORIGINAL_PROMPT}
+
+        以下はこのタスクに関連するコンテキスト情報です:
+        ${CONTEXT}"
+        else
+          ENRICHED_PROMPT="$ORIGINAL_PROMPT"
+        fi
+
+        # 複数行出力を GITHUB_OUTPUT に設定
+        echo "enriched_prompt<<CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+        echo "$ENRICHED_PROMPT" >> $GITHUB_OUTPUT
+        echo "CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+
+    # 5. 進捗コメントの投稿
     - name: Codex 実行開始をコメント
       if: inputs.issue_number != '' && inputs.github_token != ''
       id: progress
@@ -49,25 +159,31 @@ runs:
       with:
         github-token: ${{ inputs.github_token }}
         script: |
+          const branchName = '${{ steps.branch.outputs.branch_name }}' || '${{ inputs.head_ref }}';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          let body = `⏳ **Codex** が処理を開始しました... — [ジョブを表示](${runUrl})`;
+          if (branchName) {
+            body += `\nブランチ: \`${branchName}\``;
+          }
           const { data: comment } = await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: Number('${{ inputs.issue_number }}'),
-            body: '⏳ **Codex** が処理を開始しました...'
+            body: body
           });
           core.setOutput('comment_id', String(comment.id));
 
-    # 3A. API キーパス: Codex GitHub Action で実行
+    # 6A. API キーパス: Codex GitHub Action で実行
     - name: Run Codex GitHub Action (API キー)
       if: inputs.codex_code_oauth_token != ''
       uses: openai/codex-github-action@v1
       with:
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.context.outputs.enriched_prompt }}
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
-    # 3B. auth.json パス: CLI で直接実行
+    # 6B. auth.json パス: CLI で直接実行
     - name: Setup Node.js for Codex CLI
       if: inputs.codex_code_oauth_token == ''
       uses: actions/setup-node@v4
@@ -78,7 +194,7 @@ runs:
       if: inputs.codex_code_oauth_token == ''
       shell: bash
       env:
-        PROMPT: ${{ inputs.prompt }}
+        PROMPT: ${{ steps.context.outputs.enriched_prompt }}
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
@@ -110,26 +226,61 @@ runs:
           exit 1
         fi
 
-    # 4. コード変更のコミット・プッシュ
+    # 7. コード変更のコミット・プッシュ（未コミットの変更を救出する機能含む）
     - name: 変更をコミット・プッシュ
       if: inputs.auto_commit == 'true'
       id: commit
       shell: bash
+      env:
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
       run: |
         if [ -n "$(git status --porcelain)" ]; then
-          git config user.name "codex[bot]"
-          git config user.email "codex[bot]@users.noreply.github.com"
           git add -A
           git commit -m "feat: Codex による変更
 
         Co-Authored-By: Codex <codex[bot]@users.noreply.github.com>"
-          git push origin HEAD
+          if [ -n "$BRANCH_NAME" ]; then
+            # 新規ブランチの場合は upstream を設定してプッシュ
+            git push -u origin "$BRANCH_NAME"
+          else
+            git push origin HEAD
+          fi
           echo "changes_pushed=true" >> $GITHUB_OUTPUT
         else
           echo "changes_pushed=false" >> $GITHUB_OUTPUT
         fi
 
-    # 5. 結果コメントの更新（成功時）
+    # 8. 空ブランチのクリーンアップ
+    - name: 空ブランチの削除
+      if: always() && inputs.create_branch == 'true' && steps.branch.outputs.branch_name != ''
+      shell: bash
+      env:
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        CHANGES_PUSHED: ${{ steps.commit.outputs.changes_pushed }}
+      run: |
+        # 変更がプッシュされていない場合、リモートにブランチがあれば削除
+        if [ "$CHANGES_PUSHED" != "true" ]; then
+          # ブランチがリモートに存在するか確認
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
+            echo "変更なし: リモートブランチ '${BRANCH_NAME}' を削除します"
+            git push origin --delete "$BRANCH_NAME" || echo "::warning::ブランチの削除に失敗しました"
+          else
+            echo "ブランチ '${BRANCH_NAME}' はリモートに存在しないためスキップします"
+          fi
+        fi
+
+    # 9. auth.json のクリーンアップ
+    - name: Cleanup auth.json
+      if: always() && inputs.codex_auth_json != ''
+      shell: bash
+      run: |
+        CODEX_HOME="${HOME}/.codex"
+        if [ -f "$CODEX_HOME/auth.json" ]; then
+          rm -f "$CODEX_HOME/auth.json"
+          echo "auth.json をクリーンアップしました"
+        fi
+
+    # 10. 結果コメントの更新（成功時）
     - name: 実行結果をコメント
       if: inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
       uses: actions/github-script@v7
@@ -138,14 +289,33 @@ runs:
         script: |
           const changesPushed = '${{ steps.commit.outputs.changes_pushed }}' === 'true';
           const autoCommit = '${{ inputs.auto_commit }}' === 'true';
+          const branchName = '${{ steps.branch.outputs.branch_name }}' || '${{ inputs.head_ref }}';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
           let body = '### ✅ Codex 実行完了\n\n';
+
           if (autoCommit && changesPushed) {
-            body += 'コード変更をコミット・プッシュしました。';
+            body += 'コード変更をコミット・プッシュしました。\n\n';
+
+            // ブランチリンクの表示
+            if (branchName) {
+              const branchUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/tree/${branchName}`;
+              body += `**ブランチ**: [\`${branchName}\`](${branchUrl})\n`;
+            }
+
+            // PR 作成リンク（新規ブランチの場合のみ）
+            if ('${{ inputs.create_branch }}' === 'true' && branchName) {
+              const prUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/compare/${branchName}?expand=1`;
+              body += `\n[📝 PR を作成する](${prUrl})\n`;
+            }
           } else if (autoCommit) {
             body += '実行は完了しましたが、ファイルの変更はありませんでした。';
           } else {
             body += '実行が完了しました。';
           }
+
+          body += `\n\n---\n[ジョブを表示](${runUrl})`;
+
           await github.rest.issues.updateComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
@@ -153,7 +323,7 @@ runs:
             body: body
           });
 
-    # 6. エラー時のコメント更新
+    # 11. エラー時のコメント更新
     - name: エラー結果をコメント
       if: failure() && inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
       uses: actions/github-script@v7

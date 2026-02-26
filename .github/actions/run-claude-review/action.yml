@@ -25,6 +25,10 @@ inputs:
     description: "Issue/PR 番号（Codex のコメント投稿に使用）"
     required: false
     default: ""
+  pr_number:
+    description: "PR 番号（Codex の PR コンテキスト取得に使用）"
+    required: false
+    default: ""
   model:
     description: "Claude model (sonnet/opus/haiku)"
     required: false
@@ -95,4 +99,5 @@ runs:
         github_token: ${{ inputs.github_token }}
         prompt: ${{ steps.codex_prompt.outputs.content }}
         issue_number: ${{ inputs.issue_number }}
+        pr_number: ${{ inputs.pr_number }}
         auto_commit: "false"
