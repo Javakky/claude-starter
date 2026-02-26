@@ -1,70 +1,33 @@
-# Claude Code ガイド（入口）
+# Claude Code ガイド
 
-このリポジトリで Claude Code を使うときの入口です。
-ルールの正本は `.claude/rules/` にあります（ここだけ育てる）。
+## プロジェクト概要
 
-## 最低限
-- 余計な整形・無関係なリネームはしない
-- 2回続けて詰まったら止めて状況整理（ログ要点・仮説・次の一手）
+Claude Starter は、GitHub Actions × Claude Code による AI 駆動開発ワークフローを導入する copier テンプレート。
 
-## 言語: 日本語での成果物生成
-- **全ての成果物は日本語で生成すること。**
-- コード内のコメント、Issue、Pull Request の説明、コミットメッセージなど、Claude が生成するすべてのテキストは日本語でなければならない。
-- 思考プロセス（thinking process）のログは英語でも構わないが、最終的な出力は必ず日本語にすること。
+- テンプレート本体: `template/`
+- ルール正本: `.claude/rules/`（ここだけ育てる）
+- テンプレ同期: `python scripts/sync_templates.py`（`docs/agent/` → `.github/` へ反映）
+
+## 言語
+
+全ての成果物（コメント、コミットメッセージ、PR説明、Issue）は日本語で生成する。
+
+## 環境・検証
+
+- `template/` 配下と本体（`.claude/rules/`、`docs/agent/`）の内容を一致させること
+- テンプレ同期: `python scripts/sync_templates.py`
+- copier 設定: `copier.yml`（`_skip_if_exists` でユーザーカスタマイズを保護）
 
 ## テンプレ
+
 - タスク: `docs/agent/TASK.md`
 - PR本文: `docs/agent/PR.md`
 
-## スキル（自動選択）
-Claude が必要に応じて自動的に使用。
-
-**タスク開始**（排他）
-- `/orchestrator` - 新規タスク・機能追加の計画
-- `/debug` - バグ調査・問題の原因特定
-
-**実装**
-- `/implement` - コード実装 + PR本文作成
-
-**検証**
-- `/test-generate` - テストコード生成
-- `/fix_ci` - CI エラー修正
-
-**改善**
-- `/refactor` - リファクタリング
-
-**レビュー**
-- `/review` - コードレビュー（ビルトイン、セキュリティチェック含む）
-
 ## Conventional Commits
 
-コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/) に従うことを推奨します。
-これにより、コミット履歴が読みやすくなり、変更内容が理解しやすくなります。
+コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/) に従う。
 
-### プレフィックスの種類
+レビュースキップ対象（PR タイトルのプレフィックス）:
+- `docs:` / `style:` / `chore:` / `wip:`
 
-- `feat`: 新機能の追加
-- `fix`: バグ修正
-- `docs`: ドキュメントのみの変更
-- `style`: コードの動作に影響しない変更（フォーマット、セミコロンなど）
-- `refactor`: リファクタリング
-- `perf`: パフォーマンス改善
-- `test`: テストの追加・修正
-- `build`: ビルドシステムや外部依存に関する変更
-- `ci`: CI設定やスクリプトの変更
-- `chore`: 上記以外の雑多な変更（.gitignoreの更新など）
-- `wip`: 作業中
-
-### レビューのスキップ
-
-Pull Requestのタイトルが以下のプレフィックスで始まる場合、Claudeによる自動レビューはスキップされます。
-これは、アプリケーションのロジックやビルドプロセスに直接的な影響を与えない、リスクの低い変更に限定されています。
-
-**スキップ対象のプレフィックス:**
-
-- `docs:`: ドキュメントの変更
-- `style:`: コードフォーマットの修正
-- `chore:`: ビルドやソースコードに影響しない雑多な変更
-- `wip:`: 作業中のためレビュー対象外
-
-`build:` や `ci:` など、一見すると軽微に見える変更も、プロジェクト全体の安定性に影響を与える可能性があるため、レビュー対象としています。
+`build:` や `ci:` はプロジェクト安定性に影響するためレビュー対象。
