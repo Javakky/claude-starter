@@ -66,5 +66,11 @@ runs:
           chmod 600 "$CODEX_HOME/auth.json"
         fi
         # @openai/codex のインストールと実行
-        npm install -g @openai/codex
-        codex --full-auto "$PROMPT"
+        if ! npm install -g @openai/codex; then
+          echo "::error::@openai/codex のインストールに失敗しました。npm が利用可能か確認してください。"
+          exit 1
+        fi
+        if ! codex --full-auto "$PROMPT"; then
+          echo "::error::Codex の実行に失敗しました。認証情報（API キーまたは auth.json）と入力プロンプトを確認してください。"
+          exit 1
+        fi
