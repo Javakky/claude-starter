@@ -18,8 +18,9 @@ inputs:
     description: "Milestone タイトル"
     required: true
   claude_code_oauth_token:
-    description: "Claude Code OAuth Token"
-    required: true
+    description: "Claude Code OAuth Token（mention_type が claude の場合に使用）"
+    required: false
+    default: ""
   codex_code_oauth_token:
     description: "Codex Code OAuth Token（mention_type が codex の場合に使用）"
     required: false
@@ -44,6 +45,22 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Validate token
+      shell: bash
+      env:
+        MENTION_TYPE: ${{ inputs.mention_type }}
+        CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
+      run: |
+        if [ "$MENTION_TYPE" = "codex" ] && [ -z "$CODEX_TOKEN" ]; then
+          echo "::error::codex_code_oauth_token は mention_type が codex の場合に必須です"
+          exit 1
+        fi
+        if [ "$MENTION_TYPE" != "codex" ] && [ -z "$CLAUDE_TOKEN" ]; then
+          echo "::error::claude_code_oauth_token は mention_type が claude の場合に必須です"
+          exit 1
+        fi
+
     - name: Resolve Claude options
       id: opts
       uses: actions/github-script@v7
@@ -103,11 +120,11 @@ runs:
         echo "EOF" >> $GITHUB_OUTPUT
 
     - name: Run Claude Breakdown Action (Custom token mode)
-      if: inputs.github_token != '' && inputs.github_token != null
+      if: inputs.mention_type != 'codex' && inputs.github_token != '' && inputs.github_token != null
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
-        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         prompt: ${{ steps.prompt.outputs.content }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
@@ -116,13 +133,27 @@ runs:
           ${{ steps.tools.outputs.tools }}
 
     - name: Run Claude Breakdown Action (App mode)
-      if: inputs.github_token == '' || inputs.github_token == null
+      if: inputs.mention_type != 'codex' && (inputs.github_token == '' || inputs.github_token == null)
       uses: anthropics/claude-code-action@v1
       with:
-        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         prompt: ${{ steps.prompt.outputs.content }}
         claude_args: >-
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}
           --allowedTools "Bash(gh issue create:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Read,Glob,Grep"
           ${{ steps.tools.outputs.tools }}
+
+    - name: Install Codex CLI
+      if: inputs.mention_type == 'codex'
+      shell: bash
+      run: npm install -g @openai/codex
+
+    - name: Run Codex (breakdown)
+      if: inputs.mention_type == 'codex'
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+        PROMPT: ${{ steps.prompt.outputs.content }}
+      run: |
+        codex --approval-mode full-auto --quiet "$PROMPT"

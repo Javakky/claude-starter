@@ -3,8 +3,9 @@ description: "Runs the Claude Code Action for PR reviews"
 
 inputs:
   claude_code_oauth_token:
-    description: "Claude Code OAuth Token"
-    required: true
+    description: "Claude Code OAuth Token（mention_type が claude の場合に使用）"
+    required: false
+    default: ""
   codex_code_oauth_token:
     description: "Codex Code OAuth Token（mention_type が codex の場合に使用）"
     required: false
@@ -33,10 +34,27 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Validate token
+      shell: bash
+      env:
+        MENTION_TYPE: ${{ inputs.mention_type }}
+        CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
+      run: |
+        if [ "$MENTION_TYPE" = "codex" ] && [ -z "$CODEX_TOKEN" ]; then
+          echo "::error::codex_code_oauth_token は mention_type が codex の場合に必須です"
+          exit 1
+        fi
+        if [ "$MENTION_TYPE" != "codex" ] && [ -z "$CLAUDE_TOKEN" ]; then
+          echo "::error::claude_code_oauth_token は mention_type が claude の場合に必須です"
+          exit 1
+        fi
+
     - name: Run Claude Review Action
+      if: inputs.mention_type != 'codex'
       uses: anthropics/claude-code-action@v1
       with:
-        claude_code_oauth_token: ${{ inputs.mention_type == 'codex' && inputs.codex_code_oauth_token || inputs.claude_code_oauth_token }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         prompt: "${{ inputs.prompt }}"
         track_progress: true
         allowed_bots: "${{ inputs.allowed_bots }}"
@@ -44,3 +62,17 @@ runs:
           --model ${{ inputs.model }}
           --max-turns ${{ inputs.max_turns }}
           --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+
+    - name: Install Codex CLI
+      if: inputs.mention_type == 'codex'
+      shell: bash
+      run: npm install -g @openai/codex
+
+    - name: Run Codex (review)
+      if: inputs.mention_type == 'codex'
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+        PROMPT: ${{ inputs.prompt }}
+      run: |
+        codex --approval-mode full-auto --quiet "$PROMPT"
