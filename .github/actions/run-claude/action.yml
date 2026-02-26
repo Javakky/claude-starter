@@ -24,6 +24,10 @@ inputs:
     description: "メンションの種類（claude または codex）"
     required: false
     default: "claude"
+  issue_number:
+    description: "Issue/PR 番号（Codex のコメント投稿に使用）"
+    required: false
+    default: ""
   default_model:
     description: "Default Claude model"
     required: false
@@ -129,3 +133,5 @@ runs:
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
         prompt: ${{ inputs.comment_body }}
+        issue_number: ${{ inputs.issue_number }}
+        auto_commit: "true"

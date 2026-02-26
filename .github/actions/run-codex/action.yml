@@ -1,5 +1,5 @@
 name: "Run Codex"
-description: "Codex のセットアップと実行を行う共通アクション"
+description: "Codex のセットアップと実行を行う共通アクション（GitHub 連携機能付き）"
 
 inputs:
   codex_code_oauth_token:
@@ -11,16 +11,25 @@ inputs:
     required: false
     default: ""
   github_token:
-    description: "GitHub トークン（Codex GitHub Action が PR/Issue に書き込むために必要）"
+    description: "GitHub トークン（コメント投稿・gh CLI 認証に使用）"
     required: false
     default: ""
   prompt:
     description: "Codex に渡すプロンプト"
     required: true
+  issue_number:
+    description: "コメントを投稿する Issue/PR 番号（空の場合はコメント投稿をスキップ）"
+    required: false
+    default: ""
+  auto_commit:
+    description: "Codex 実行後にコード変更を自動コミット・プッシュするか"
+    required: false
+    default: "true"
 
 runs:
   using: "composite"
   steps:
+    # 1. 認証情報の検証
     - name: Validate Codex credentials
       shell: bash
       env:
@@ -32,6 +41,23 @@ runs:
           exit 1
         fi
 
+    # 2. 進捗コメントの投稿
+    - name: Codex 実行開始をコメント
+      if: inputs.issue_number != '' && inputs.github_token != ''
+      id: progress
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const { data: comment } = await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: Number('${{ inputs.issue_number }}'),
+            body: '⏳ **Codex** が処理を開始しました...'
+          });
+          core.setOutput('comment_id', String(comment.id));
+
+    # 3A. API キーパス: Codex GitHub Action で実行
     - name: Run Codex GitHub Action (API キー)
       if: inputs.codex_code_oauth_token != ''
       uses: openai/codex-github-action@v1
@@ -41,6 +67,7 @@ runs:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # 3B. auth.json パス: CLI で直接実行
     - name: Setup Node.js for Codex CLI
       if: inputs.codex_code_oauth_token == ''
       uses: actions/setup-node@v4
@@ -53,8 +80,10 @@ runs:
       env:
         PROMPT: ${{ inputs.prompt }}
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         set -e
+
         # auth.json のセットアップ
         if [ -n "$CODEX_AUTH_JSON" ]; then
           CODEX_HOME="${HOME}/.codex"
@@ -65,12 +94,76 @@ runs:
           fi
           chmod 600 "$CODEX_HOME/auth.json"
         fi
-        # @openai/codex のインストールと実行
+
+        # @openai/codex のインストール
         if ! npm install -g @openai/codex; then
           echo "::error::@openai/codex のインストールに失敗しました。npm が利用可能か確認してください。"
           exit 1
         fi
+
+        # gh CLI は GITHUB_TOKEN 環境変数で自動認証される
+        # Codex が --full-auto モードで gh コマンドを使用してコメント投稿・Issue 作成等が可能
+
+        # Codex 実行
         if ! codex --full-auto "$PROMPT"; then
-          echo "::error::Codex の実行に失敗しました。認証情報（API キーまたは auth.json）と入力プロンプトを確認してください。"
+          echo "::error::Codex の実行に失敗しました。認証情報と入力プロンプトを確認してください。"
           exit 1
         fi
+
+    # 4. コード変更のコミット・プッシュ
+    - name: 変更をコミット・プッシュ
+      if: inputs.auto_commit == 'true'
+      id: commit
+      shell: bash
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          git config user.name "codex[bot]"
+          git config user.email "codex[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: Codex による変更
+
+        Co-Authored-By: Codex <codex[bot]@users.noreply.github.com>"
+          git push origin HEAD
+          echo "changes_pushed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changes_pushed=false" >> $GITHUB_OUTPUT
+        fi
+
+    # 5. 結果コメントの更新（成功時）
+    - name: 実行結果をコメント
+      if: inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const changesPushed = '${{ steps.commit.outputs.changes_pushed }}' === 'true';
+          const autoCommit = '${{ inputs.auto_commit }}' === 'true';
+          let body = '### ✅ Codex 実行完了\n\n';
+          if (autoCommit && changesPushed) {
+            body += 'コード変更をコミット・プッシュしました。';
+          } else if (autoCommit) {
+            body += '実行は完了しましたが、ファイルの変更はありませんでした。';
+          } else {
+            body += '実行が完了しました。';
+          }
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: Number('${{ steps.progress.outputs.comment_id }}'),
+            body: body
+          });
+
+    # 6. エラー時のコメント更新
+    - name: エラー結果をコメント
+      if: failure() && inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: Number('${{ steps.progress.outputs.comment_id }}'),
+            body: `### ❌ Codex 実行失敗\n\nエラーが発生しました。[ワークフローログ](${runUrl}) を確認してください。`
+          });

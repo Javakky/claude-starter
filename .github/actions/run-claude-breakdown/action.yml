@@ -153,3 +153,5 @@ runs:
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
         prompt: ${{ steps.prompt.outputs.content }}
+        issue_number: ${{ inputs.issue_number }}
+        auto_commit: "false"
