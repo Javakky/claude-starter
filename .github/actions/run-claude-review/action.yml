@@ -74,15 +74,27 @@ runs:
       env:
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
       run: |
+        set -e
         CODEX_HOME="${HOME}/.codex"
         mkdir -p "$CODEX_HOME"
-        echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"
+        if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
+          echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
+          exit 1
+        fi
         chmod 600 "$CODEX_HOME/auth.json"
 
-    - name: Run Codex GitHub Action (review)
-      if: inputs.mention_type == 'codex'
+    - name: Run Codex GitHub Action (API キー)
+      if: inputs.mention_type == 'codex' && inputs.codex_code_oauth_token != ''
       uses: openai/codex-github-action@v1
       with:
         prompt: ${{ inputs.prompt }}
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+
+    - name: Run Codex CLI (auth.json)
+      if: inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+      run: |
+        npx --yes @openai/codex "$PROMPT"

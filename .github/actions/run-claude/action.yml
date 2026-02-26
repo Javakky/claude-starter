@@ -108,7 +108,7 @@ runs:
         echo "tools=$TOOLS" >> $GITHUB_OUTPUT
 
     - name: Run Claude Code Action (Custom token mode)
-      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type != 'codex' && (inputs.github_token != '' || inputs.github_token != null)
+      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type != 'codex' && inputs.github_token != ''
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
@@ -119,7 +119,7 @@ runs:
           ${{ steps.tools.outputs.tools }}
 
     - name: Run Claude Code Action (App mode)
-      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type != 'codex' && (inputs.github_token == '' || inputs.github_token == null)
+      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type != 'codex' && inputs.github_token == ''
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -134,15 +134,27 @@ runs:
       env:
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
       run: |
+        set -e
         CODEX_HOME="${HOME}/.codex"
         mkdir -p "$CODEX_HOME"
-        echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"
+        if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
+          echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
+          exit 1
+        fi
         chmod 600 "$CODEX_HOME/auth.json"
 
-    - name: Run Codex GitHub Action
-      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex'
+    - name: Run Codex GitHub Action (API キー)
+      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_code_oauth_token != ''
       uses: openai/codex-github-action@v1
       with:
         prompt: ${{ inputs.comment_body }}
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+
+    - name: Run Codex CLI (auth.json)
+      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.comment_body }}
+      run: |
+        npx --yes @openai/codex "$PROMPT"

@@ -73,7 +73,10 @@ jobs:
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
+          mention_type: ${{ steps.prep.outputs.mention_type }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           # 必要なら上書き
           # model: 'haiku'
           # max_turns: '30'
