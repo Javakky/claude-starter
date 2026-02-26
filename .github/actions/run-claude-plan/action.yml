@@ -43,24 +43,19 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Validate token
+    - name: Validate Claude token
+      if: inputs.mention_type != 'codex'
       shell: bash
       env:
-        MENTION_TYPE: ${{ inputs.mention_type }}
         CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
-        CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
-        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
       run: |
-        if [ "$MENTION_TYPE" = "codex" ] && [ -z "$CODEX_TOKEN" ] && [ -z "$CODEX_AUTH_JSON" ]; then
-          echo "::error::codex_code_oauth_token または codex_auth_json は mention_type が codex の場合に必須です"
-          exit 1
-        fi
-        if [ "$MENTION_TYPE" != "codex" ] && [ -z "$CLAUDE_TOKEN" ]; then
+        if [ -z "$CLAUDE_TOKEN" ]; then
           echo "::error::claude_code_oauth_token は mention_type が claude の場合に必須です"
           exit 1
         fi
 
     - name: Resolve Claude options
+      if: inputs.mention_type != 'codex'
       id: opts
       uses: actions/github-script@v7
       env:
@@ -81,6 +76,7 @@ runs:
           core.setOutput("max_turns", String(maxTurns));
 
     - name: Build allowed tools
+      if: inputs.mention_type != 'codex'
       id: tools
       shell: bash
       env:
@@ -140,38 +136,10 @@ runs:
           --allowedTools "Bash(gh issue comment:*),Bash(gh issue view:*),Read,Glob,Grep"
           ${{ steps.tools.outputs.tools }}
 
-    - name: Run Codex GitHub Action (API キー)
-      if: inputs.mention_type == 'codex' && inputs.codex_code_oauth_token != ''
-      uses: openai/codex-github-action@v1
+    - name: Run Codex
+      if: inputs.mention_type == 'codex'
+      uses: ./.github/actions/run-codex
       with:
+        codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
+        codex_auth_json: ${{ inputs.codex_auth_json }}
         prompt: ${{ steps.prompt.outputs.content }}
-      env:
-        OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
-
-    - name: Setup Node.js for Codex CLI
-      if: inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-
-    - name: Run Codex CLI (auth.json)
-      if: inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
-      shell: bash
-      env:
-        PROMPT: ${{ steps.prompt.outputs.content }}
-        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
-      run: |
-        set -e
-        # auth.json のセットアップ
-        if [ -n "$CODEX_AUTH_JSON" ]; then
-          CODEX_HOME="${HOME}/.codex"
-          mkdir -p "$CODEX_HOME"
-          if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
-            echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
-            exit 1
-          fi
-          chmod 600 "$CODEX_HOME/auth.json"
-        fi
-        # @openai/codex のインストールと実行
-        npm install -g @openai/codex
-        codex "$PROMPT"
