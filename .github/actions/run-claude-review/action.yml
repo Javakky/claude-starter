@@ -2,6 +2,9 @@ name: "Run Claude Review"
 description: "Runs the Claude Code Action for PR reviews"
 
 inputs:
+  github_token:
+    description: "GitHub token"
+    required: false
   claude_code_oauth_token:
     description: "Claude Code OAuth Token（mention_type が claude の場合に使用）"
     required: false
@@ -62,10 +65,28 @@ runs:
           --max-turns ${{ inputs.max_turns }}
           --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
 
+    - name: Build Codex review prompt
+      if: inputs.mention_type == 'codex'
+      id: codex_prompt
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+      run: |
+        # /review は Claude 固有のコマンドのため、Codex 用のレビュープロンプトに変換
+        if [ "$PROMPT" = "/review" ]; then
+          CODEX_PROMPT="この PR の変更内容をレビューしてください。バグ、セキュリティ問題、パフォーマンスの問題、コードの品質について確認し、改善提案を含むレビューコメントを投稿してください。"
+        else
+          CODEX_PROMPT="$PROMPT"
+        fi
+        echo "content<<EOF" >> $GITHUB_OUTPUT
+        echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
     - name: Run Codex
       if: inputs.mention_type == 'codex'
       uses: ./.github/actions/run-codex
       with:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
-        prompt: ${{ inputs.prompt }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.codex_prompt.outputs.content }}

@@ -10,6 +10,10 @@ inputs:
     description: "Codex 認証情報（auth.json の Base64 エンコード値）"
     required: false
     default: ""
+  github_token:
+    description: "GitHub トークン（Codex GitHub Action が PR/Issue に書き込むために必要）"
+    required: false
+    default: ""
   prompt:
     description: "Codex に渡すプロンプト"
     required: true
@@ -35,12 +39,13 @@ runs:
         prompt: ${{ inputs.prompt }}
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
 
     - name: Setup Node.js for Codex CLI
       if: inputs.codex_code_oauth_token == ''
       uses: actions/setup-node@v4
       with:
-        node-version: '22'
+        node-version: '20'
 
     - name: Run Codex CLI (auth.json)
       if: inputs.codex_code_oauth_token == ''
@@ -62,4 +67,4 @@ runs:
         fi
         # @openai/codex のインストールと実行
         npm install -g @openai/codex
-        codex "$PROMPT"
+        codex --full-auto "$PROMPT"
