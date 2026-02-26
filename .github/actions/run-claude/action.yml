@@ -128,21 +128,6 @@ runs:
           --max-turns ${{ steps.opts.outputs.max_turns }}
           ${{ steps.tools.outputs.tools }}
 
-    - name: Setup Codex authentication
-      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_auth_json != ''
-      shell: bash
-      env:
-        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
-      run: |
-        set -e
-        CODEX_HOME="${HOME}/.codex"
-        mkdir -p "$CODEX_HOME"
-        if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
-          echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
-          exit 1
-        fi
-        chmod 600 "$CODEX_HOME/auth.json"
-
     - name: Run Codex GitHub Action (API キー)
       if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_code_oauth_token != ''
       uses: openai/codex-github-action@v1
@@ -151,10 +136,30 @@ runs:
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
 
+    - name: Setup Node.js for Codex CLI
+      if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
     - name: Run Codex CLI (auth.json)
       if: steps.trigger.outputs.triggered == 'true' && inputs.mention_type == 'codex' && inputs.codex_code_oauth_token == ''
       shell: bash
       env:
         PROMPT: ${{ inputs.comment_body }}
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
       run: |
-        npx --yes @openai/codex "$PROMPT"
+        set -e
+        # auth.json のセットアップ
+        if [ -n "$CODEX_AUTH_JSON" ]; then
+          CODEX_HOME="${HOME}/.codex"
+          mkdir -p "$CODEX_HOME"
+          if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
+            echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
+            exit 1
+          fi
+          chmod 600 "$CODEX_HOME/auth.json"
+        fi
+        # @openai/codex のインストールと実行
+        npm install -g @openai/codex
+        codex "$PROMPT"
