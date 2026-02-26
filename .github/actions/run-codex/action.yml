@@ -73,7 +73,7 @@ runs:
         BRANCH_PREFIX: ${{ inputs.branch_prefix }}
         ISSUE_NUMBER: ${{ inputs.issue_number }}
       run: |
-        TIMESTAMP=$(date +%Y%m%d-%H%M)
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
         BRANCH_NAME="${BRANCH_PREFIX}issue-${ISSUE_NUMBER}-${TIMESTAMP}"
         echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
 
@@ -97,7 +97,10 @@ runs:
           echo "PR #${PR_NUMBER} のコンテキストを取得中..."
 
           # PR の概要取得
-          PR_BODY=$(gh pr view "$PR_NUMBER" --json title,body --jq '"# PR #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>/dev/null || echo "")
+          if ! PR_BODY=$(gh pr view "$PR_NUMBER" --json title,body --jq '"# PR #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>&1); then
+            echo "::warning::PR 概要の取得に失敗しました: ${PR_BODY}"
+            PR_BODY=""
+          fi
           if [ -n "$PR_BODY" ]; then
             CONTEXT="${CONTEXT}
 
@@ -105,8 +108,11 @@ runs:
         ${PR_BODY}"
           fi
 
-          # PR の差分取得（最大 5000 行に制限）
-          PR_DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -5000 || echo "")
+          # PR の差分取得（大規模 PR での負荷軽減のため最大 5000 行に制限）
+          if ! PR_DIFF=$(gh pr diff "$PR_NUMBER" 2>&1 | head -5000); then
+            echo "::warning::PR 差分の取得に失敗しました: ${PR_DIFF}"
+            PR_DIFF=""
+          fi
           if [ -n "$PR_DIFF" ]; then
             CONTEXT="${CONTEXT}
 
@@ -115,7 +121,10 @@ runs:
           fi
 
           # PR の変更ファイル一覧
-          PR_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>/dev/null || echo "")
+          if ! PR_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>&1); then
+            echo "::warning::PR 変更ファイル一覧の取得に失敗しました: ${PR_FILES}"
+            PR_FILES=""
+          fi
           if [ -n "$PR_FILES" ]; then
             CONTEXT="${CONTEXT}
 
@@ -127,7 +136,10 @@ runs:
         elif [ -n "$ISSUE_NUMBER" ] && [ -n "$GH_TOKEN" ]; then
           echo "Issue #${ISSUE_NUMBER} のコンテキストを取得中..."
 
-          ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body --jq '"# Issue #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>/dev/null || echo "")
+          if ! ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body --jq '"# Issue #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>&1); then
+            echo "::warning::Issue 概要の取得に失敗しました: ${ISSUE_BODY}"
+            ISSUE_BODY=""
+          fi
           if [ -n "$ISSUE_BODY" ]; then
             CONTEXT="${CONTEXT}
 

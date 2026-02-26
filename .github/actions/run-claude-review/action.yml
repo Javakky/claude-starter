@@ -29,6 +29,10 @@ inputs:
     description: "PR 番号（Codex の PR コンテキスト取得に使用）"
     required: false
     default: ""
+  head_ref:
+    description: "PR の head ブランチ名（Codex のブランチリンク表示に使用）"
+    required: false
+    default: ""
   model:
     description: "Claude model (sonnet/opus/haiku)"
     required: false
@@ -100,4 +104,5 @@ runs:
         prompt: ${{ steps.codex_prompt.outputs.content }}
         issue_number: ${{ inputs.issue_number }}
         pr_number: ${{ inputs.pr_number }}
+        head_ref: ${{ inputs.head_ref }}
         auto_commit: "false"
