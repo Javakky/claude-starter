@@ -41,6 +41,10 @@ inputs:
     description: "作成するブランチの接頭辞"
     required: false
     default: "codex/"
+  model:
+    description: "Codex で使用するモデル名（例: o4-mini, o3, gpt-4.1）。空の場合はデフォルトモデルを使用"
+    required: false
+    default: ""
 
 outputs:
   codex_response:
@@ -68,6 +72,21 @@ runs:
       run: |
         git config user.name "codex[bot]"
         git config user.email "codex[bot]@users.noreply.github.com"
+
+    # 2.5. .codex/ ディレクトリの事前存在チェック
+    - name: Check .codex/ directory pre-existence
+      id: codex_dir
+      shell: bash
+      run: |
+        # .codex/ 内のファイルが git で追跡されているか確認
+        # ユーザーが .codex/ を管理用にコミットしている場合のみ tracked=true
+        if git ls-files .codex/ 2>/dev/null | grep -q .; then
+          echo "tracked=true" >> $GITHUB_OUTPUT
+          echo ".codex/ はリポジトリで追跡されています（ユーザー管理）"
+        else
+          echo "tracked=false" >> $GITHUB_OUTPUT
+          echo ".codex/ はリポジトリで追跡されていません（自動生成をコミットから除外）"
+        fi
 
     # 3. ブランチ作成（Issue 起点の実装時）
     - name: Create branch for issue
@@ -233,6 +252,7 @@ runs:
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GH_TOKEN: ${{ inputs.github_token }}
+        MODEL: ${{ inputs.model }}
       run: |
         set -eo pipefail
 
@@ -256,8 +276,12 @@ runs:
         # gh CLI は GITHUB_TOKEN / GH_TOKEN 環境変数で自動認証される
         # Codex が --full-auto モードで gh コマンドを使用してコメント投稿・Issue 作成等が可能
 
-        # Codex 実行（出力をキャプチャ）
-        if ! codex --full-auto "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
+        # Codex 実行（モデル指定がある場合は --model フラグを追加）
+        CODEX_ARGS="--full-auto"
+        if [ -n "$MODEL" ]; then
+          CODEX_ARGS="$CODEX_ARGS --model $MODEL"
+        fi
+        if ! codex $CODEX_ARGS "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
           echo "::error::Codex の実行に失敗しました。認証情報と入力プロンプトを確認してください。"
           exit 1
         fi
@@ -292,6 +316,8 @@ runs:
     - name: Codex 作業用ファイルのクリーンアップ
       if: inputs.auto_commit == 'true'
       shell: bash
+      env:
+        CODEX_DIR_TRACKED: ${{ steps.codex_dir.outputs.tracked }}
       run: |
         # コミットメッセージファイルを一時退避（後で使用）
         if [ -f .codex-commit-msg ]; then
@@ -301,8 +327,15 @@ runs:
         # Codex 作業用一時ファイルを削除（リポジトリにコミットしない）
         rm -f .codex-commit-msg .codex-summary.md .codex-issues.json
 
-        # auth.json がワーキングツリーに紛れていないか確認（.codex/ 自体はユーザー管理のためそのまま）
+        # auth.json がワーキングツリーに紛れていないか確認
         find . -name "auth.json" -path "*/.codex/*" -delete 2>/dev/null || true
+
+        # .codex/ がリポジトリで追跡されていなかった場合、Codex が自動生成したファイルをすべて削除
+        # （ユーザーが .codex/ を定義していないリポジトリに自動でコミットされることを防止）
+        if [ "$CODEX_DIR_TRACKED" != "true" ] && [ -d .codex ]; then
+          echo ".codex/ はリポジトリで追跡されていないため、自動生成ファイルを削除します"
+          rm -rf .codex/
+        fi
 
     # 9. コード変更のコミット・プッシュ
     - name: 変更をコミット・プッシュ
@@ -311,6 +344,7 @@ runs:
       shell: bash
       env:
         BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        CODEX_DIR_TRACKED: ${{ steps.codex_dir.outputs.tracked }}
       run: |
         # 差分がない場合はスキップ
         if [ -z "$(git status --porcelain)" ]; then
@@ -322,10 +356,16 @@ runs:
         # 変更をステージング
         git add -A
 
-        # 安全のため Codex 一時ファイル・auth.json をアンステージ（.codex/ 自体はコミット対象のまま）
+        # 安全のため Codex 一時ファイル・auth.json をアンステージ
         git reset HEAD -- .codex-commit-msg .codex-summary.md .codex-issues.json 2>/dev/null || true
         # auth.json を含むパスをアンステージ
         git diff --cached --name-only | grep 'auth\.json' | xargs -r git reset HEAD -- 2>/dev/null || true
+
+        # .codex/ がリポジトリで追跡されていなかった場合、全体をアンステージ
+        # （ユーザーが定義していない .codex/ ディレクトリを自動コミットしない）
+        if [ "$CODEX_DIR_TRACKED" != "true" ]; then
+          git reset HEAD -- .codex/ 2>/dev/null || true
+        fi
 
         # ステージされた変更があるか再確認
         if [ -z "$(git diff --cached --name-only)" ]; then
