@@ -298,11 +298,10 @@ runs:
           cp .codex-commit-msg /tmp/codex-commit-msg
         fi
 
-        # Codex 作業用ファイルを削除（リポジトリにコミットしない）
+        # Codex 作業用一時ファイルを削除（リポジトリにコミットしない）
         rm -f .codex-commit-msg .codex-summary.md .codex-issues.json
-        rm -rf .codex/
 
-        # auth.json がワーキングツリーに紛れていないか確認
+        # auth.json がワーキングツリーに紛れていないか確認（.codex/ 自体はユーザー管理のためそのまま）
         find . -name "auth.json" -path "*/.codex/*" -delete 2>/dev/null || true
 
     # 9. コード変更のコミット・プッシュ
@@ -323,10 +322,10 @@ runs:
         # 変更をステージング
         git add -A
 
-        # 安全のため Codex 関連ファイルをアンステージ
-        git reset HEAD -- .codex/ .codex-commit-msg .codex-summary.md .codex-issues.json 2>/dev/null || true
+        # 安全のため Codex 一時ファイル・auth.json をアンステージ（.codex/ 自体はコミット対象のまま）
+        git reset HEAD -- .codex-commit-msg .codex-summary.md .codex-issues.json 2>/dev/null || true
         # auth.json を含むパスをアンステージ
-        git diff --cached --name-only | grep -E '(auth\.json|\.codex/)' | xargs -r git reset HEAD -- 2>/dev/null || true
+        git diff --cached --name-only | grep 'auth\.json' | xargs -r git reset HEAD -- 2>/dev/null || true
 
         # ステージされた変更があるか再確認
         if [ -z "$(git diff --cached --name-only)" ]; then
@@ -389,8 +388,10 @@ runs:
           rm -f "$CODEX_HOME/auth.json"
           echo "auth.json をクリーンアップしました"
         fi
-        # ワーキングツリーにも Codex 作業ファイルがあれば削除
-        rm -rf .codex/ .codex-commit-msg .codex-summary.md .codex-issues.json
+        # ワーキングツリーの Codex 一時ファイルを削除（.codex/ 自体はユーザー管理のため残す）
+        rm -f .codex-commit-msg .codex-summary.md .codex-issues.json
+        # ワーキングツリーの auth.json も確実に削除
+        find . -name "auth.json" -path "*/.codex/*" -delete 2>/dev/null || true
 
     # 12. 結果コメントの更新（成功時）
     - name: 実行結果をコメント

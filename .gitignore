@@ -1,7 +1,7 @@
 /.idea/
 
-# OpenAI Codex CLI
-.codex/
+# OpenAI Codex CLI（.codex/ 自体はユーザーが管理用にコミット可能）
+.codex/auth.json
 .codex-commit-msg
 .codex-summary.md
 .codex-issues.json
