@@ -145,14 +145,96 @@ runs:
           --allowedTools "Bash(gh issue create:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Read,Glob,Grep"
           ${{ steps.tools.outputs.tools }}
 
+    - name: Build Codex breakdown prompt
+      if: inputs.mention_type == 'codex'
+      id: codex_prompt
+      shell: bash
+      env:
+        ORIGINAL_PROMPT: ${{ steps.prompt.outputs.content }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        MILESTONE_TITLE: ${{ inputs.milestone_title }}
+      run: |
+        # Codex 用のプロンプトに Issue 作成の補助指示を追加
+        # --full-auto サンドボックスがネットワークをブロックする場合に備え、
+        # gh CLI と JSON ファイル出力の両方を指示
+        CODEX_PROMPT="${ORIGINAL_PROMPT}
+
+        ---
+        【重要: Issue 作成について】
+        以下の 2 つの方法で Issue を作成してください:
+
+        1. **優先**: \`gh issue create --milestone \"${MILESTONE_TITLE}\" --title \"タイトル\" --body \"本文\"\` コマンドで直接作成を試みてください。
+        2. **フォールバック**: \`gh\` コマンドが失敗した場合（ネットワーク制限など）、以下の JSON 形式で \`.codex-issues.json\` ファイルに書き出してください:
+           \`\`\`json
+           [
+             {
+               \"title\": \"Issue タイトル\",
+               \"body\": \"Issue 本文（Markdown）\",
+               \"milestone\": \"${MILESTONE_TITLE}\"
+             }
+           ]
+           \`\`\`
+           ワークフローが自動的にこの JSON を読み取り、Issue を作成します。"
+
+        echo "content<<CODEX_BREAKDOWN_EOF" >> $GITHUB_OUTPUT
+        echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
+        echo "CODEX_BREAKDOWN_EOF" >> $GITHUB_OUTPUT
+
     - name: Run Codex
       if: inputs.mention_type == 'codex'
+      id: codex_run
       uses: ./.github/actions/run-codex
       with:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
-        prompt: ${{ steps.prompt.outputs.content }}
+        prompt: ${{ steps.codex_prompt.outputs.content }}
         issue_number: ${{ inputs.issue_number }}
         # breakdown は Issue コンテキストのみ（PR なし）
         auto_commit: "false"
+
+    # Codex が .codex-issues.json を生成した場合、ワークフローで Issue を作成
+    - name: Create issues from Codex output
+      if: inputs.mention_type == 'codex'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        MILESTONE_TITLE: ${{ inputs.milestone_title }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+      run: |
+        if [ ! -f .codex-issues.json ]; then
+          echo "::notice::.codex-issues.json が見つかりません。Codex が gh CLI で直接 Issue を作成した可能性があります。"
+          exit 0
+        fi
+
+        echo "Codex が生成した Issue 定義を読み込み、Issue を作成します..."
+        CREATED_ISSUES=""
+
+        # JSON 配列の各要素を処理
+        ISSUE_COUNT=$(jq length .codex-issues.json)
+        for i in $(seq 0 $((ISSUE_COUNT - 1))); do
+          TITLE=$(jq -r ".[$i].title" .codex-issues.json)
+          BODY=$(jq -r ".[$i].body" .codex-issues.json)
+          MILESTONE=$(jq -r ".[$i].milestone // \"${MILESTONE_TITLE}\"" .codex-issues.json)
+
+          echo "Issue 作成中: ${TITLE}"
+          if NEW_ISSUE_URL=$(gh issue create --title "$TITLE" --body "$BODY" --milestone "$MILESTONE" 2>&1); then
+            echo "  ✅ 作成成功: ${NEW_ISSUE_URL}"
+            CREATED_ISSUES="${CREATED_ISSUES}\n- ${NEW_ISSUE_URL} ${TITLE}"
+          else
+            echo "::warning::Issue 作成に失敗しました: ${TITLE} - ${NEW_ISSUE_URL}"
+          fi
+        done
+
+        # 作成結果を元 Issue にコメント
+        if [ -n "$CREATED_ISSUES" ]; then
+          COMMENT_BODY="## タスク分解が完了しました（Codex）
+
+        以下の Issue を作成し、Milestone 「${MILESTONE_TITLE}」に追加しました:
+        $(echo -e "$CREATED_ISSUES")"
+
+          gh issue comment "$ISSUE_NUMBER" --body "$COMMENT_BODY" || echo "::warning::サマリーコメントの投稿に失敗しました"
+        fi
+
+        # クリーンアップ
+        rm -f .codex-issues.json
