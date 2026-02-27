@@ -45,6 +45,10 @@ inputs:
     description: "Codex で使用するモデル名（例: o4-mini, o3, gpt-4.1）。空の場合はデフォルトモデルを使用"
     required: false
     default: ""
+  reasoning_effort:
+    description: "o-series モデルの推論レベル（low, medium, high）。空の場合はデフォルト"
+    required: false
+    default: ""
 
 outputs:
   codex_response:
@@ -253,6 +257,7 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GH_TOKEN: ${{ inputs.github_token }}
         MODEL: ${{ inputs.model }}
+        REASONING_EFFORT: ${{ inputs.reasoning_effort }}
       run: |
         set -eo pipefail
 
@@ -276,10 +281,13 @@ runs:
         # gh CLI は GITHUB_TOKEN / GH_TOKEN 環境変数で自動認証される
         # Codex が --full-auto モードで gh コマンドを使用してコメント投稿・Issue 作成等が可能
 
-        # Codex 実行（モデル指定がある場合は --model フラグを追加）
+        # Codex 実行（モデル・推論レベル指定がある場合はフラグを追加）
         CODEX_ARGS="--full-auto"
         if [ -n "$MODEL" ]; then
           CODEX_ARGS="$CODEX_ARGS --model $MODEL"
+        fi
+        if [ -n "$REASONING_EFFORT" ]; then
+          CODEX_ARGS="$CODEX_ARGS --reasoning-effort $REASONING_EFFORT"
         fi
         if ! codex $CODEX_ARGS "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
           echo "::error::Codex の実行に失敗しました。認証情報と入力プロンプトを確認してください。"

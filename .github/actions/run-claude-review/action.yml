@@ -114,7 +114,11 @@ runs:
 
           // 既知の Codex/OpenAI モデル名をブラケット形式でパース
           if (!model) {
-            const knownModels = ['o4-mini', 'o3', 'gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano', 'codex-mini'];
+            const knownModels = [
+              'o4-mini', 'o3', 'o3-mini', 'o1', 'o1-mini', 'o1-pro',
+              'gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini',
+              'codex-mini'
+            ];
             for (const m of knownModels) {
               if (body.includes(`[${m}]`)) {
                 model = m;
@@ -123,7 +127,12 @@ runs:
             }
           }
 
+          // [thinking=xxx] or [reasoning=xxx] 形式の推論レベル指定をパース
+          const thinkingMatch = body.match(/\[(?:thinking|reasoning)=(low|medium|high)\]/i);
+          const reasoningEffort = thinkingMatch ? thinkingMatch[1].toLowerCase() : "";
+
           core.setOutput("model", model);
+          core.setOutput("reasoning_effort", reasoningEffort);
 
     - name: Run Codex
       if: inputs.mention_type == 'codex'
@@ -137,4 +146,5 @@ runs:
         pr_number: ${{ inputs.pr_number }}
         head_ref: ${{ inputs.head_ref }}
         model: ${{ steps.codex_opts.outputs.model }}
+        reasoning_effort: ${{ steps.codex_opts.outputs.reasoning_effort }}
         auto_commit: "false"
