@@ -1,0 +1,575 @@
+name: "Run Codex"
+description: "Codex のセットアップと実行を行う共通アクション（GitHub 連携機能付き）"
+
+inputs:
+  codex_code_oauth_token:
+    description: "Codex Code OAuth Token / API キー"
+    required: false
+    default: ""
+  codex_auth_json:
+    description: "Codex 認証情報（auth.json の Base64 エンコード値）"
+    required: false
+    default: ""
+  github_token:
+    description: "GitHub トークン（コメント投稿・gh CLI 認証に使用）"
+    required: false
+    default: ""
+  prompt:
+    description: "Codex に渡すプロンプト"
+    required: true
+  comment_body:
+    description: "トリガーコメントの本文（モデル・推論レベルの自動解決とトークン削除に使用）"
+    required: false
+    default: ""
+  issue_number:
+    description: "コメントを投稿する Issue/PR 番号（空の場合はコメント投稿をスキップ）"
+    required: false
+    default: ""
+  pr_number:
+    description: "PR 番号（PR コンテキストの取得に使用。空の場合は Issue コンテキスト）"
+    required: false
+    default: ""
+  head_ref:
+    description: "PR の head ブランチ名（ブランチリンク表示に使用）"
+    required: false
+    default: ""
+  auto_commit:
+    description: "Codex 実行後にコード変更を自動コミット・プッシュするか"
+    required: false
+    default: "true"
+  create_branch:
+    description: "実行前に新しいブランチを作成するか（Issue 起点の実装で使用）"
+    required: false
+    default: "false"
+  branch_prefix:
+    description: "作成するブランチの接頭辞"
+    required: false
+    default: "codex/"
+  model:
+    description: "Codex で使用するモデル名（例: o4-mini, o3, gpt-4.1）。空の場合はデフォルトモデルを使用"
+    required: false
+    default: ""
+  reasoning_effort:
+    description: "o-series モデルの推論レベル（low, medium, high）。空の場合はデフォルト"
+    required: false
+    default: ""
+
+outputs:
+  codex_response:
+    description: "Codex の実行結果サマリー"
+    value: ${{ steps.codex_output.outputs.response }}
+
+runs:
+  using: "composite"
+  steps:
+    # 1. 認証情報の検証
+    - name: Validate Codex credentials
+      shell: bash
+      env:
+        CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+      run: |
+        if [ -z "$CODEX_TOKEN" ] && [ -z "$CODEX_AUTH_JSON" ]; then
+          echo "::error::codex_code_oauth_token または codex_auth_json のいずれかが必須です"
+          exit 1
+        fi
+
+    # 1.5. Codex オプション解決（モデル・推論レベルをコメント本文から自動パース）
+    - name: Resolve Codex options
+      id: codex_opts
+      uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
+        EXPLICIT_MODEL: ${{ inputs.model }}
+        EXPLICIT_REASONING: ${{ inputs.reasoning_effort }}
+      with:
+        script: |
+          const body = process.env.COMMENT_BODY || "";
+          const explicitModel = process.env.EXPLICIT_MODEL || "";
+          const explicitReasoning = process.env.EXPLICIT_REASONING || "";
+
+          // 明示的な指定がある場合はそちらを優先
+          let model = explicitModel;
+          if (!model && body) {
+            const modelMatch = body.match(/\[model=([^\]]+)\]/);
+            model = modelMatch ? modelMatch[1] : "";
+
+            if (!model) {
+              const knownModels = [
+                'o4-mini', 'o3', 'o3-mini', 'o1', 'o1-mini', 'o1-pro',
+                'gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini',
+                'codex-mini'
+              ];
+              for (const m of knownModels) {
+                if (body.includes(`[${m}]`)) {
+                  model = m;
+                  break;
+                }
+              }
+            }
+          }
+
+          let reasoningEffort = explicitReasoning;
+          if (!reasoningEffort && body) {
+            const thinkingMatch = body.match(/\[(?:thinking|reasoning)=(low|medium|high)\]/i);
+            reasoningEffort = thinkingMatch ? thinkingMatch[1].toLowerCase() : "";
+          }
+
+          core.setOutput("model", model);
+          core.setOutput("reasoning_effort", reasoningEffort);
+
+    # 2. Git ユーザー設定（Codex が内部で git 操作する可能性があるため、実行前に設定）
+    - name: Configure git user
+      shell: bash
+      run: |
+        git config user.name "codex[bot]"
+        git config user.email "codex[bot]@users.noreply.github.com"
+
+    # 2.5. .codex/ ディレクトリの事前存在チェック
+    - name: Check .codex/ directory pre-existence
+      id: codex_dir
+      shell: bash
+      run: |
+        # .codex/ 内のファイルが git で追跡されているか確認
+        # ユーザーが .codex/ を管理用にコミットしている場合のみ tracked=true
+        if git ls-files .codex/ 2>/dev/null | grep -q .; then
+          echo "tracked=true" >> $GITHUB_OUTPUT
+          echo ".codex/ はリポジトリで追跡されています（ユーザー管理）"
+        else
+          echo "tracked=false" >> $GITHUB_OUTPUT
+          echo ".codex/ はリポジトリで追跡されていません（自動生成をコミットから除外）"
+        fi
+
+    # 3. ブランチ作成（Issue 起点の実装時）
+    - name: Create branch for issue
+      if: inputs.create_branch == 'true' && inputs.issue_number != ''
+      id: branch
+      shell: bash
+      env:
+        BRANCH_PREFIX: ${{ inputs.branch_prefix }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        BRANCH_NAME="${BRANCH_PREFIX}issue-${ISSUE_NUMBER}-${TIMESTAMP}"
+        echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+
+        git checkout -b "$BRANCH_NAME"
+        echo "ブランチ '${BRANCH_NAME}' を作成しました"
+
+    # 4. PR/Issue コンテキストの収集 + プロンプト拡充
+    - name: Collect context
+      id: context
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        ORIGINAL_PROMPT: ${{ inputs.prompt }}
+        AUTO_COMMIT: ${{ inputs.auto_commit }}
+      run: |
+        CONTEXT=""
+
+        # PR コンテキストの取得
+        if [ -n "$PR_NUMBER" ] && [ -n "$GH_TOKEN" ]; then
+          echo "PR #${PR_NUMBER} のコンテキストを取得中..."
+
+          # PR の概要取得
+          if ! PR_BODY=$(gh pr view "$PR_NUMBER" --json title,body --jq '"# PR #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>&1); then
+            echo "::warning::PR 概要の取得に失敗しました: ${PR_BODY}"
+            PR_BODY=""
+          fi
+          if [ -n "$PR_BODY" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- PR 概要 ---
+        ${PR_BODY}"
+          fi
+
+          # PR の差分取得（大規模 PR での負荷軽減のため最大 5000 行に制限）
+          if ! PR_DIFF=$(gh pr diff "$PR_NUMBER" 2>&1 | head -5000); then
+            echo "::warning::PR 差分の取得に失敗しました: ${PR_DIFF}"
+            PR_DIFF=""
+          fi
+          if [ -n "$PR_DIFF" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- PR 差分 ---
+        ${PR_DIFF}"
+          fi
+
+          # PR の変更ファイル一覧
+          if ! PR_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>&1); then
+            echo "::warning::PR 変更ファイル一覧の取得に失敗しました: ${PR_FILES}"
+            PR_FILES=""
+          fi
+          if [ -n "$PR_FILES" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- 変更ファイル一覧 ---
+        ${PR_FILES}"
+          fi
+
+        # Issue コンテキストの取得（PR でない場合）
+        elif [ -n "$ISSUE_NUMBER" ] && [ -n "$GH_TOKEN" ]; then
+          echo "Issue #${ISSUE_NUMBER} のコンテキストを取得中..."
+
+          if ! ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body --jq '"# Issue #" + (.number|tostring) + ": " + .title + "\n\n" + .body' 2>&1); then
+            echo "::warning::Issue 概要の取得に失敗しました: ${ISSUE_BODY}"
+            ISSUE_BODY=""
+          fi
+          if [ -n "$ISSUE_BODY" ]; then
+            CONTEXT="${CONTEXT}
+
+        --- Issue 概要 ---
+        ${ISSUE_BODY}"
+          fi
+        fi
+
+        # プロンプトからブラケットトークンを削除（Codex に不要な指示を渡さない）
+        CLEAN_PROMPT="$ORIGINAL_PROMPT"
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[model=[^]]+\]//g')
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(thinking|reasoning)=(low|medium|high)\]//gI')
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(o[0-9][a-z0-9-]*|gpt-[a-z0-9.-]+|codex-[a-z0-9-]+)\]//g')
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(turns|max-turns)=[0-9]+\]//g')
+        # メンション削除（単語境界を考慮し、メールアドレス等の誤削除を防止）
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/(^|[[:space:]])@(claude|codex)([[:space:]]|$)/\1\3/g')
+        # 連続する空白を整理
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/  +/ /g' | sed 's/^ *//')
+
+        # コンテキスト付きプロンプトを構築
+        ENRICHED_PROMPT="$CLEAN_PROMPT"
+
+        if [ -n "$CONTEXT" ]; then
+          ENRICHED_PROMPT="${ENRICHED_PROMPT}
+
+        以下はこのタスクに関連するコンテキスト情報です:
+        ${CONTEXT}"
+        fi
+
+        # auto_commit 時: コミットメッセージ生成指示を追加
+        if [ "$AUTO_COMMIT" = "true" ]; then
+          ENRICHED_PROMPT="${ENRICHED_PROMPT}
+
+        ---
+        【重要】コードを変更した場合、変更内容を要約した Conventional Commits 形式のコミットメッセージ（日本語）を \`.codex-commit-msg\` ファイルに書き出してください。
+        形式: 1行目にタイトル（例: feat: ○○を追加）、空行の後に詳細を記述。"
+        fi
+
+        # 作業サマリー指示を追加（全パス共通）
+        ENRICHED_PROMPT="${ENRICHED_PROMPT}
+
+        ---
+        【重要】作業完了後、作業内容のサマリーを \`.codex-summary.md\` に Markdown 形式で書き出してください。
+        実装の場合は変更内容の概要を、相談・質問への回答の場合は結論を記述してください。"
+
+        # 複数行出力を GITHUB_OUTPUT に設定
+        echo "enriched_prompt<<CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+        echo "$ENRICHED_PROMPT" >> $GITHUB_OUTPUT
+        echo "CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+
+    # 5. 進捗コメントの投稿
+    - name: Codex 実行開始をコメント
+      if: inputs.issue_number != '' && inputs.github_token != ''
+      id: progress
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const branchName = '${{ steps.branch.outputs.branch_name }}' || '${{ inputs.head_ref }}';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          let body = `⏳ **Codex** が処理を開始しました... — [ジョブを表示](${runUrl})`;
+          if (branchName) {
+            body += `\nブランチ: \`${branchName}\``;
+          }
+          const { data: comment } = await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: Number('${{ inputs.issue_number }}'),
+            body: body
+          });
+          core.setOutput('comment_id', String(comment.id));
+
+    # 6. Codex CLI で実行（API キー / auth.json 共通パス）
+    - name: Setup Node.js for Codex
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run Codex CLI
+      id: codex_cli
+      shell: bash
+      env:
+        PROMPT: ${{ steps.context.outputs.enriched_prompt }}
+        CODEX_CODE_OAUTH_TOKEN: ${{ inputs.codex_code_oauth_token }}
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        MODEL: ${{ steps.codex_opts.outputs.model }}
+        REASONING_EFFORT: ${{ steps.codex_opts.outputs.reasoning_effort }}
+      run: |
+        set -eo pipefail
+
+        # 認証のセットアップ
+        # API キーがある場合は環境変数で渡す
+        if [ -n "$CODEX_CODE_OAUTH_TOKEN" ]; then
+          export OPENAI_API_KEY="$CODEX_CODE_OAUTH_TOKEN"
+        fi
+
+        # auth.json がある場合はファイルに配置
+        if [ -n "$CODEX_AUTH_JSON" ]; then
+          CODEX_HOME="${HOME}/.codex"
+          mkdir -p "$CODEX_HOME"
+          if ! echo "$CODEX_AUTH_JSON" | base64 -d > "$CODEX_HOME/auth.json"; then
+            echo "::error::codex_auth_json のデコードに失敗しました。有効な Base64 であることを確認してください。"
+            exit 1
+          fi
+          chmod 600 "$CODEX_HOME/auth.json"
+        fi
+
+        # @openai/codex のインストール
+        if ! npm install -g @openai/codex; then
+          echo "::error::@openai/codex のインストールに失敗しました。npm が利用可能か確認してください。"
+          exit 1
+        fi
+
+        # gh CLI は GITHUB_TOKEN / GH_TOKEN 環境変数で自動認証される
+        # Codex が --full-auto モードで gh コマンドを使用してコメント投稿・Issue 作成等が可能
+
+        # Codex 実行（モデル・推論レベル指定がある場合はフラグを追加）
+        CODEX_ARGS="--full-auto"
+        if [ -n "$MODEL" ]; then
+          CODEX_ARGS="$CODEX_ARGS --model $MODEL"
+        fi
+        if [ -n "$REASONING_EFFORT" ]; then
+          CODEX_ARGS="$CODEX_ARGS --reasoning-effort $REASONING_EFFORT"
+        fi
+        if ! codex $CODEX_ARGS "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
+          echo "::error::Codex の実行に失敗しました。認証情報（API キーまたは auth.json）と入力プロンプトを確認してください。"
+          exit 1
+        fi
+
+    # 7. Codex 出力の読み込み
+    - name: Codex 出力の読み込み
+      if: always()
+      id: codex_output
+      shell: bash
+      run: |
+        RESPONSE=""
+
+        # Codex が生成したサマリーがあれば優先（最大 100KB）
+        if [ -f .codex-summary.md ]; then
+          RESPONSE=$(head -c 100000 .codex-summary.md)
+        # CLI パスの stdout 出力をフォールバックとして使用（最大 5000 行、100KB まで）
+        elif [ -f /tmp/codex-output.txt ]; then
+          RESPONSE=$(tail -5000 /tmp/codex-output.txt | head -c 100000)
+        fi
+
+        if [ -z "$RESPONSE" ]; then
+          RESPONSE="（出力なし）"
+        fi
+
+        # ランダムな EOF マーカーで安全に複数行出力を設定
+        EOF_MARKER="EOF_CODEX_$(date +%s%N)"
+        echo "response<<${EOF_MARKER}" >> $GITHUB_OUTPUT
+        echo "$RESPONSE" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
+
+    # 8. Codex 作業用ファイルのクリーンアップ（コミット前）
+    - name: Codex 作業用ファイルのクリーンアップ
+      if: inputs.auto_commit == 'true'
+      shell: bash
+      env:
+        CODEX_DIR_TRACKED: ${{ steps.codex_dir.outputs.tracked }}
+      run: |
+        # コミットメッセージファイルを一時退避（後で使用）
+        if [ -f .codex-commit-msg ]; then
+          cp .codex-commit-msg /tmp/codex-commit-msg
+        fi
+
+        # Codex 作業用一時ファイルを削除（リポジトリにコミットしない）
+        rm -f .codex-commit-msg .codex-summary.md .codex-issues.json
+
+        # auth.json がワーキングツリーに紛れていないか確認
+        find . -name "auth.json" -path "*/.codex/*" -delete 2>/dev/null || true
+
+        # .codex/ がリポジトリで追跡されていなかった場合、Codex が自動生成したファイルをすべて削除
+        # （ユーザーが .codex/ を定義していないリポジトリに自動でコミットされることを防止）
+        if [ "$CODEX_DIR_TRACKED" != "true" ] && [ -d .codex ]; then
+          echo ".codex/ はリポジトリで追跡されていないため、自動生成ファイルを削除します"
+          rm -rf .codex/
+        fi
+
+    # 9. コード変更のコミット・プッシュ
+    - name: 変更をコミット・プッシュ
+      if: inputs.auto_commit == 'true'
+      id: commit
+      shell: bash
+      env:
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        CODEX_DIR_TRACKED: ${{ steps.codex_dir.outputs.tracked }}
+      run: |
+        # 差分がない場合はスキップ
+        if [ -z "$(git status --porcelain)" ]; then
+          echo "changes_pushed=false" >> $GITHUB_OUTPUT
+          echo "コード変更なし: コミットをスキップします"
+          exit 0
+        fi
+
+        # 変更をステージング
+        git add -A
+
+        # 安全のため Codex 一時ファイル・auth.json をアンステージ
+        git reset HEAD -- .codex-commit-msg .codex-summary.md .codex-issues.json 2>/dev/null || true
+        # auth.json を含むパスをアンステージ（ファイル名の安全な処理）
+        git diff --cached --name-only | grep 'auth\.json' | while IFS= read -r file; do
+          git reset HEAD -- "$file" 2>/dev/null || true
+        done
+
+        # .codex/ がリポジトリで追跡されていなかった場合、全体をアンステージ
+        # （ユーザーが定義していない .codex/ ディレクトリを自動コミットしない）
+        if [ "$CODEX_DIR_TRACKED" != "true" ]; then
+          git reset HEAD -- .codex/ 2>/dev/null || true
+        fi
+
+        # ステージされた変更があるか再確認
+        if [ -z "$(git diff --cached --name-only)" ]; then
+          echo "changes_pushed=false" >> $GITHUB_OUTPUT
+          echo "ステージされた変更なし: コミットをスキップします"
+          exit 0
+        fi
+
+        # コミットメッセージの決定（Codex が生成したメッセージを優先）
+        if [ -f /tmp/codex-commit-msg ]; then
+          COMMIT_MSG=$(cat /tmp/codex-commit-msg)
+        else
+          echo "::warning::Codex がコミットメッセージファイル (.codex-commit-msg) を生成しませんでした。自動生成メッセージを使用します"
+          # フォールバック: 変更ファイルから自動生成
+          CHANGED_FILES=$(git diff --cached --name-only | head -20)
+          FILE_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          COMMIT_MSG="feat: Codex による変更
+
+        変更ファイル (${FILE_COUNT}件):
+        ${CHANGED_FILES}"
+        fi
+
+        git commit -m "${COMMIT_MSG}
+
+        Co-Authored-By: Codex <codex[bot]@users.noreply.github.com>"
+
+        if [ -n "$BRANCH_NAME" ]; then
+          # 新規ブランチの場合は upstream を設定してプッシュ
+          git push -u origin "$BRANCH_NAME"
+        else
+          git push origin HEAD
+        fi
+        echo "changes_pushed=true" >> $GITHUB_OUTPUT
+
+    # 10. 空ブランチのクリーンアップ
+    - name: 空ブランチの削除
+      if: always() && inputs.create_branch == 'true' && steps.branch.outputs.branch_name != ''
+      shell: bash
+      env:
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        CHANGES_PUSHED: ${{ steps.commit.outputs.changes_pushed }}
+      run: |
+        # 変更がプッシュされていない場合、リモートにブランチがあれば削除
+        if [ "$CHANGES_PUSHED" != "true" ]; then
+          # ブランチがリモートに存在するか確認
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
+            echo "変更なし: リモートブランチ '${BRANCH_NAME}' を削除します"
+            git push origin --delete "$BRANCH_NAME" || echo "::warning::ブランチの削除に失敗しました"
+          else
+            echo "ブランチ '${BRANCH_NAME}' はリモートに存在しないためスキップします"
+          fi
+        fi
+
+    # 11. auth.json のクリーンアップ
+    - name: Cleanup auth.json
+      if: always() && inputs.codex_auth_json != ''
+      shell: bash
+      run: |
+        CODEX_HOME="${HOME}/.codex"
+        if [ -f "$CODEX_HOME/auth.json" ]; then
+          rm -f "$CODEX_HOME/auth.json"
+          echo "auth.json をクリーンアップしました"
+        fi
+        # ワーキングツリーの Codex 一時ファイルを削除（.codex/ 自体はユーザー管理のため残す）
+        rm -f .codex-commit-msg .codex-summary.md .codex-issues.json
+        # ワーキングツリーの auth.json も確実に削除
+        find . -name "auth.json" -path "*/.codex/*" -delete 2>/dev/null || true
+
+    # 12. 結果コメントの更新（成功時）
+    - name: 実行結果をコメント
+      if: inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
+      uses: actions/github-script@v7
+      env:
+        CODEX_RESPONSE: ${{ steps.codex_output.outputs.response }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const changesPushed = '${{ steps.commit.outputs.changes_pushed }}' === 'true';
+          const autoCommit = '${{ inputs.auto_commit }}' === 'true';
+          const branchName = '${{ steps.branch.outputs.branch_name }}' || '${{ inputs.head_ref }}';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const codexResponse = process.env.CODEX_RESPONSE || '';
+
+          let body = '### ✅ Codex 実行完了\n\n';
+
+          // Codex の作業サマリーを表示
+          if (codexResponse && codexResponse !== '（出力なし）') {
+            body += codexResponse + '\n\n';
+          }
+
+          if (autoCommit && changesPushed) {
+            body += '---\n\nコード変更をコミット・プッシュしました。\n\n';
+
+            // ブランチリンクの表示
+            if (branchName) {
+              const branchUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/tree/${branchName}`;
+              body += `**ブランチ**: [\`${branchName}\`](${branchUrl})\n`;
+            }
+
+            // PR 作成リンク（新規ブランチの場合のみ）
+            if ('${{ inputs.create_branch }}' === 'true' && branchName) {
+              const prUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/compare/${branchName}?expand=1`;
+              body += `\n[📝 PR を作成する](${prUrl})\n`;
+            }
+          } else if (autoCommit) {
+            body += '---\n\n実行は完了しましたが、ファイルの変更はありませんでした。';
+          }
+
+          body += `\n\n---\n[ジョブを表示](${runUrl})`;
+
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: Number('${{ steps.progress.outputs.comment_id }}'),
+            body: body
+          });
+
+    # 13. エラー時のコメント更新
+    - name: エラー結果をコメント
+      if: failure() && inputs.issue_number != '' && inputs.github_token != '' && steps.progress.outputs.comment_id != ''
+      uses: actions/github-script@v7
+      env:
+        CODEX_RESPONSE: ${{ steps.codex_output.outputs.response }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const codexResponse = process.env.CODEX_RESPONSE || '';
+
+          let body = '### ❌ Codex 実行失敗\n\n';
+
+          if (codexResponse && codexResponse !== '（出力なし）') {
+            body += '**実行ログ:**\n\n' + codexResponse + '\n\n---\n\n';
+          }
+
+          body += `エラーが発生しました。[ワークフローログ](${runUrl}) を確認してください。`;
+
+          await github.rest.issues.updateComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: Number('${{ steps.progress.outputs.comment_id }}'),
+            body: body
+          });

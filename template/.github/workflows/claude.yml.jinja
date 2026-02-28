@@ -23,7 +23,7 @@ jobs:
   impl:
     if: |
       github.event.comment.user.type != 'Bot' &&
-      contains(github.event.comment.body, '@claude') &&
+      (contains(github.event.comment.body, '@claude') || contains(github.event.comment.body, '@codex')) &&
       !contains(github.event.comment.body, '[review]') &&
       !contains(github.event.comment.body, '[plan]') &&
       !contains(github.event.comment.body, '[breakdown]')
@@ -79,7 +79,13 @@ jobs:
         with:
           # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
           comment_body: ${{ steps.prep.outputs.comment_body }}
+          mention_type: ${{ steps.prep.outputs.mention_type }}
+          issue_number: ${{ steps.prep.outputs.issue_number }}
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          head_ref: ${{ steps.prep.outputs.head_ref }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           # 必要に応じてデフォルト値をオーバーライド
           # default_model: 'opus'
           # default_max_turns: 20
