@@ -56,7 +56,7 @@ inputs:
 
 outputs:
   codex_response:
-    description: "Codex の実行結果サマリー（CLI パスのみ）"
+    description: "Codex の実行結果サマリー"
     value: ${{ steps.codex_output.outputs.response }}
 
 runs:
@@ -231,7 +231,8 @@ runs:
         CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(thinking|reasoning)=(low|medium|high)\]//gI')
         CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(o[0-9][a-z0-9-]*|gpt-[a-z0-9.-]+|codex-[a-z0-9-]+)\]//g')
         CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/\[(turns|max-turns)=[0-9]+\]//g')
-        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/@(claude|codex)//g')
+        # メンション削除（単語境界を考慮し、メールアドレス等の誤削除を防止）
+        CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/(^|[[:space:]])@(claude|codex)([[:space:]]|$)/\1\3/g')
         # 連続する空白を整理
         CLEAN_PROMPT=$(echo "$CLEAN_PROMPT" | sed -E 's/  +/ /g' | sed 's/^ *//')
 
@@ -288,37 +289,18 @@ runs:
           });
           core.setOutput('comment_id', String(comment.id));
 
-    # 6A. API キーパス: Codex GitHub Action で実行
-    - name: Run Codex GitHub Action (API キー)
-      id: codex_action
-      if: inputs.codex_code_oauth_token != ''
-      uses: openai/codex-github-action@v1
-      with:
-        prompt: ${{ steps.context.outputs.enriched_prompt }}
-      env:
-        OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-
-    - name: Validate Codex GitHub Action execution
-      if: inputs.codex_code_oauth_token != '' && steps.codex_action.outcome != 'success'
-      shell: bash
-      run: |
-        echo "::error::Codex GitHub Action の実行に失敗しました。openai/codex-github-action@v1 の仕様を確認してください。"
-        exit 1
-
-    # 6B. auth.json パス: CLI で直接実行（出力をキャプチャ）
+    # 6. Codex CLI で実行（API キー / auth.json 共通パス）
     - name: Setup Node.js for Codex
-      # API キーパス（GitHub Action）でも CLI パスでも Node.js が必要な可能性があるため常に実行
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Run Codex CLI (auth.json)
-      if: inputs.codex_code_oauth_token == ''
+    - name: Run Codex CLI
       id: codex_cli
       shell: bash
       env:
         PROMPT: ${{ steps.context.outputs.enriched_prompt }}
+        CODEX_CODE_OAUTH_TOKEN: ${{ inputs.codex_code_oauth_token }}
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GH_TOKEN: ${{ inputs.github_token }}
@@ -327,7 +309,13 @@ runs:
       run: |
         set -eo pipefail
 
-        # auth.json のセットアップ
+        # 認証のセットアップ
+        # API キーがある場合は環境変数で渡す
+        if [ -n "$CODEX_CODE_OAUTH_TOKEN" ]; then
+          export OPENAI_API_KEY="$CODEX_CODE_OAUTH_TOKEN"
+        fi
+
+        # auth.json がある場合はファイルに配置
         if [ -n "$CODEX_AUTH_JSON" ]; then
           CODEX_HOME="${HOME}/.codex"
           mkdir -p "$CODEX_HOME"
@@ -356,7 +344,7 @@ runs:
           CODEX_ARGS="$CODEX_ARGS --reasoning-effort $REASONING_EFFORT"
         fi
         if ! codex $CODEX_ARGS "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
-          echo "::error::Codex の実行に失敗しました。認証情報と入力プロンプトを確認してください。"
+          echo "::error::Codex の実行に失敗しました。認証情報（API キーまたは auth.json）と入力プロンプトを確認してください。"
           exit 1
         fi
 
@@ -432,8 +420,10 @@ runs:
 
         # 安全のため Codex 一時ファイル・auth.json をアンステージ
         git reset HEAD -- .codex-commit-msg .codex-summary.md .codex-issues.json 2>/dev/null || true
-        # auth.json を含むパスをアンステージ
-        git diff --cached --name-only | grep 'auth\.json' | xargs -r git reset HEAD -- 2>/dev/null || true
+        # auth.json を含むパスをアンステージ（ファイル名の安全な処理）
+        git diff --cached --name-only | grep 'auth\.json' | while IFS= read -r file; do
+          git reset HEAD -- "$file" 2>/dev/null || true
+        done
 
         # .codex/ がリポジトリで追跡されていなかった場合、全体をアンステージ
         # （ユーザーが定義していない .codex/ ディレクトリを自動コミットしない）
