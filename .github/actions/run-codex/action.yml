@@ -299,9 +299,16 @@ runs:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    - name: Validate Codex GitHub Action execution
+      if: inputs.codex_code_oauth_token != '' && steps.codex_action.outcome != 'success'
+      shell: bash
+      run: |
+        echo "::error::Codex GitHub Action の実行に失敗しました。openai/codex-github-action@v1 の仕様を確認してください。"
+        exit 1
+
     # 6B. auth.json パス: CLI で直接実行（出力をキャプチャ）
-    - name: Setup Node.js for Codex CLI
-      if: inputs.codex_code_oauth_token == ''
+    - name: Setup Node.js for Codex
+      # API キーパス（GitHub Action）でも CLI パスでも Node.js が必要な可能性があるため常に実行
       uses: actions/setup-node@v4
       with:
         node-version: '20'
@@ -361,12 +368,12 @@ runs:
       run: |
         RESPONSE=""
 
-        # Codex が生成したサマリーがあれば優先
+        # Codex が生成したサマリーがあれば優先（最大 100KB）
         if [ -f .codex-summary.md ]; then
-          RESPONSE=$(head -c 50000 .codex-summary.md)
-        # CLI パスの stdout 出力をフォールバックとして使用
+          RESPONSE=$(head -c 100000 .codex-summary.md)
+        # CLI パスの stdout 出力をフォールバックとして使用（最大 5000 行、100KB まで）
         elif [ -f /tmp/codex-output.txt ]; then
-          RESPONSE=$(tail -500 /tmp/codex-output.txt | head -c 40000)
+          RESPONSE=$(tail -5000 /tmp/codex-output.txt | head -c 100000)
         fi
 
         if [ -z "$RESPONSE" ]; then
