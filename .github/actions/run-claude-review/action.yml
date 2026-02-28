@@ -9,11 +9,11 @@ inputs:
     description: "トリガーとなったコメントの本文（モデル・ターン数の解決に使用）。コメントによる発火時のみ有効"
     required: false
     default: ""
-  default_model:
+  model:
     description: "Claude model (sonnet/opus/haiku)"
     required: false
     default: "haiku"
-  default_max_turns:
+  max_turns:
     description: "Max turns"
     required: false
     default: "30"
@@ -41,10 +41,10 @@ runs:
           const model =
             body.includes("[sonnet]") ? "sonnet" :
             body.includes("[opus]")   ? "opus"   :
-            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.default_model }}";
+            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.model }}";
 
           const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.default_max_turns }}");
+          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.max_turns }}");
 
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
