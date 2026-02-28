@@ -75,7 +75,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
-          model: '{{ claude_model }}'
+{% endraw %}          model: '{{ claude_model }}'
           max_turns: '{{ review_max_turns }}'
           # prompt: '/review'
-{% endraw %}
