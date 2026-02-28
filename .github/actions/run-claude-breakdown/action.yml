@@ -155,26 +155,25 @@ runs:
         MILESTONE_TITLE: ${{ inputs.milestone_title }}
       run: |
         # Codex 用のプロンプトに Issue 作成の補助指示を追加
-        # --full-auto サンドボックスがネットワークをブロックする場合に備え、
-        # gh CLI と JSON ファイル出力の両方を指示
+        # Codex の --full-auto サンドボックスではネットワークがブロックされるため、
+        # gh CLI は使用できない。JSON ファイル出力でワークフロー側が Issue を作成する
         CODEX_PROMPT="${ORIGINAL_PROMPT}
 
         ---
         【重要: Issue 作成について】
-        以下の 2 つの方法で Issue を作成してください:
+        Codex のサンドボックス環境では \`gh\` コマンドは使用できません。
+        代わりに、以下の JSON 形式で \`.codex-issues.json\` ファイルに書き出してください。
+        ワークフローが自動的にこの JSON を読み取り、Issue を作成します。
 
-        1. **優先**: \`gh issue create --milestone \"${MILESTONE_TITLE}\" --title \"タイトル\" --body \"本文\"\` コマンドで直接作成を試みてください。
-        2. **フォールバック**: \`gh\` コマンドが失敗した場合（ネットワーク制限など）、以下の JSON 形式で \`.codex-issues.json\` ファイルに書き出してください:
-           \`\`\`json
-           [
-             {
-               \"title\": \"Issue タイトル\",
-               \"body\": \"Issue 本文（Markdown）\",
-               \"milestone\": \"${MILESTONE_TITLE}\"
-             }
-           ]
-           \`\`\`
-           ワークフローが自動的にこの JSON を読み取り、Issue を作成します。"
+        \`\`\`json
+        [
+          {
+            \"title\": \"Issue タイトル\",
+            \"body\": \"Issue 本文（Markdown）\",
+            \"milestone\": \"${MILESTONE_TITLE}\"
+          }
+        ]
+        \`\`\`"
 
         echo "content<<CODEX_BREAKDOWN_EOF" >> $GITHUB_OUTPUT
         echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
@@ -204,7 +203,7 @@ runs:
         ISSUE_NUMBER: ${{ inputs.issue_number }}
       run: |
         if [ ! -f .codex-issues.json ]; then
-          echo "::notice::.codex-issues.json が見つかりません。Codex が gh CLI で直接 Issue を作成した可能性があります。"
+          echo "::warning::.codex-issues.json が見つかりません。Codex が Issue 定義の生成に失敗した可能性があります。"
           exit 0
         fi
 

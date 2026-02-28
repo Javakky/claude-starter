@@ -302,8 +302,6 @@ runs:
         PROMPT: ${{ steps.context.outputs.enriched_prompt }}
         CODEX_CODE_OAUTH_TOKEN: ${{ inputs.codex_code_oauth_token }}
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        GH_TOKEN: ${{ inputs.github_token }}
         MODEL: ${{ steps.codex_opts.outputs.model }}
         REASONING_EFFORT: ${{ steps.codex_opts.outputs.reasoning_effort }}
       run: |
@@ -332,8 +330,9 @@ runs:
           exit 1
         fi
 
-        # gh CLI は GITHUB_TOKEN / GH_TOKEN 環境変数で自動認証される
-        # Codex が --full-auto モードで gh コマンドを使用してコメント投稿・Issue 作成等が可能
+        # 注意: Codex の --full-auto サンドボックスではネットワークアクセスが制限されるため、
+        # gh CLI は Codex 内部からは使用できない。
+        # GitHub 連携（コメント投稿・Issue 作成等）はワークフロー側のステップで行う。
 
         # Codex 実行（モデル・推論レベル指定がある場合はフラグを追加）
         CODEX_ARGS="--full-auto"
