@@ -74,7 +74,8 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-{% endraw %}          model: '{{ claude_model }}'
+          comment_body: ${{ steps.prep.outputs.comment_body }}
+          model: '{{ claude_model }}'
           max_turns: '{{ review_max_turns }}'
-{% raw %}          # prompt: '/review'
+          # prompt: '/review'
 {% endraw %}
