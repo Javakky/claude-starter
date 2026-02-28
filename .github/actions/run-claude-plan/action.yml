@@ -17,7 +17,7 @@ inputs:
   default_model:
     description: "デフォルトの Claude モデル"
     required: false
-    default: "sonnet"
+    default: "opus"
   default_max_turns:
     description: "デフォルトの max turns（コードリーディングが少ない分、実装より多めに設定）"
     required: false

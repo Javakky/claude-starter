@@ -14,11 +14,11 @@ inputs:
   default_model:
     description: "Default Claude model"
     required: false
-    default: "sonnet"
+    default: "opus"
   default_max_turns:
     description: "Default max turns"
     required: false
-    default: "100"
+    default: "1000"
   allowed_tools:
     description: "Additional allowed tools (newline-separated)"
     required: false
