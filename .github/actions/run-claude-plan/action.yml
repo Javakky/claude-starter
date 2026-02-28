@@ -136,42 +136,6 @@ runs:
           --allowedTools "Bash(gh issue comment:*),Bash(gh issue view:*),Read,Glob,Grep"
           ${{ steps.tools.outputs.tools }}
 
-    - name: Resolve Codex options
-      if: inputs.mention_type == 'codex'
-      id: codex_opts
-      uses: actions/github-script@v7
-      env:
-        COMMENT_BODY: ${{ inputs.comment_body }}
-      with:
-        script: |
-          const body = process.env.COMMENT_BODY || "";
-
-          // [model=xxx] 形式のモデル指定をパース
-          const modelMatch = body.match(/\[model=([^\]]+)\]/);
-          let model = modelMatch ? modelMatch[1] : "";
-
-          // 既知の Codex/OpenAI モデル名をブラケット形式でパース
-          if (!model) {
-            const knownModels = [
-              'o4-mini', 'o3', 'o3-mini', 'o1', 'o1-mini', 'o1-pro',
-              'gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini',
-              'codex-mini'
-            ];
-            for (const m of knownModels) {
-              if (body.includes(`[${m}]`)) {
-                model = m;
-                break;
-              }
-            }
-          }
-
-          // [thinking=xxx] or [reasoning=xxx] 形式の推論レベル指定をパース
-          const thinkingMatch = body.match(/\[(?:thinking|reasoning)=(low|medium|high)\]/i);
-          const reasoningEffort = thinkingMatch ? thinkingMatch[1].toLowerCase() : "";
-
-          core.setOutput("model", model);
-          core.setOutput("reasoning_effort", reasoningEffort);
-
     - name: Run Codex
       if: inputs.mention_type == 'codex'
       uses: ./.github/actions/run-codex
@@ -180,8 +144,7 @@ runs:
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
         prompt: ${{ steps.prompt.outputs.content }}
+        comment_body: ${{ inputs.comment_body }}
         issue_number: ${{ inputs.issue_number }}
-        model: ${{ steps.codex_opts.outputs.model }}
-        reasoning_effort: ${{ steps.codex_opts.outputs.reasoning_effort }}
         # plan は Issue コンテキストのみ（PR なし）
         auto_commit: "false"
