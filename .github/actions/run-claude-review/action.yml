@@ -37,6 +37,10 @@ inputs:
     description: "PR の head ブランチ名（Codex のブランチリンク表示に使用）"
     required: false
     default: ""
+  comment_body:
+    description: "トリガーとなったコメントの本文（モデル・ターン数の解決に使用）。コメントによる発火時のみ有効"
+    required: false
+    default: ""
   model:
     description: "Claude model (sonnet/opus/haiku)"
     required: false
@@ -68,6 +72,26 @@ runs:
           exit 1
         fi
 
+    - name: Resolve Claude options
+      id: opts
+      uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment_body }}
+      with:
+        script: |
+          const body = process.env.COMMENT_BODY || "";
+
+          const model =
+            body.includes("[sonnet]") ? "sonnet" :
+            body.includes("[opus]")   ? "opus"   :
+            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.model }}";
+
+          const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
+          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.max_turns }}");
+
+          core.setOutput("model", model);
+          core.setOutput("max_turns", String(maxTurns));
+
     - name: Run Claude Review Action
       if: inputs.mention_type != 'codex'
       uses: anthropics/claude-code-action@v1
@@ -77,8 +101,8 @@ runs:
         track_progress: true
         allowed_bots: "${{ inputs.allowed_bots }}"
         claude_args: |
-          --model ${{ inputs.model }}
-          --max-turns ${{ inputs.max_turns }}
+          --model ${{ steps.opts.outputs.model }}
+          --max-turns ${{ steps.opts.outputs.max_turns }}
           --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
 
     - name: Build Codex review prompt
