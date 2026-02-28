@@ -12,12 +12,25 @@ inputs:
     description: "プランを投稿する Issue 番号"
     required: true
   claude_code_oauth_token:
-    description: "Claude Code OAuth Token"
-    required: true
+    description: "Claude Code OAuth Token（mention_type が claude の場合に使用）"
+    required: false
+    default: ""
+  codex_code_oauth_token:
+    description: "Codex Code OAuth Token / API キー（mention_type が codex の場合に使用）"
+    required: false
+    default: ""
+  codex_auth_json:
+    description: "Codex 認証情報（auth.json の Base64 エンコード値）"
+    required: false
+    default: ""
+  mention_type:
+    description: "メンションの種類（claude または codex）"
+    required: false
+    default: "claude"
   default_model:
     description: "デフォルトの Claude モデル"
     required: false
-    default: "opus"
+    default: "sonnet"
   default_max_turns:
     description: "デフォルトの max turns（コードリーディングが少ない分、実装より多めに設定）"
     required: false
@@ -30,7 +43,19 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Validate Claude token
+      if: inputs.mention_type != 'codex'
+      shell: bash
+      env:
+        CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
+      run: |
+        if [ -z "$CLAUDE_TOKEN" ]; then
+          echo "::error::claude_code_oauth_token は mention_type が claude の場合に必須です"
+          exit 1
+        fi
+
     - name: Resolve Claude options
+      if: inputs.mention_type != 'codex'
       id: opts
       uses: actions/github-script@v7
       env:
@@ -51,6 +76,7 @@ runs:
           core.setOutput("max_turns", String(maxTurns));
 
     - name: Build allowed tools
+      if: inputs.mention_type != 'codex'
       id: tools
       shell: bash
       env:
@@ -86,7 +112,7 @@ runs:
         echo "EOF" >> $GITHUB_OUTPUT
 
     - name: Run Claude Plan Action (Custom token mode)
-      if: inputs.github_token != '' && inputs.github_token != null
+      if: inputs.mention_type != 'codex' && inputs.github_token != ''
       uses: anthropics/claude-code-action@v1
       with:
         github_token: ${{ inputs.github_token }}
@@ -99,7 +125,7 @@ runs:
           ${{ steps.tools.outputs.tools }}
 
     - name: Run Claude Plan Action (App mode)
-      if: inputs.github_token == '' || inputs.github_token == null
+      if: inputs.mention_type != 'codex' && inputs.github_token == ''
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -109,3 +135,16 @@ runs:
           --max-turns ${{ steps.opts.outputs.max_turns }}
           --allowedTools "Bash(gh issue comment:*),Bash(gh issue view:*),Read,Glob,Grep"
           ${{ steps.tools.outputs.tools }}
+
+    - name: Run Codex
+      if: inputs.mention_type == 'codex'
+      uses: ./.github/actions/run-codex
+      with:
+        codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
+        codex_auth_json: ${{ inputs.codex_auth_json }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.prompt.outputs.content }}
+        comment_body: ${{ inputs.comment_body }}
+        issue_number: ${{ inputs.issue_number }}
+        # plan は Issue コンテキストのみ（PR なし）
+        auto_commit: "false"

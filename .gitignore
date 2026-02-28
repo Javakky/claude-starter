@@ -1,1 +1,6 @@
 /.idea/
+
+# Codex 一時ファイル
+.codex-commit-msg
+.codex-summary.md
+.codex-issues.json

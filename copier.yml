@@ -5,6 +5,11 @@ _min_copier_version: "9.0.0"
 _subdirectory: template
 _answers_file: .copier-answers.yml
 
+# ユーザーがカスタマイズした可能性があるファイルは上書きしない
+_skip_if_exists:
+  - ".claude/rules/*"
+  - "CLAUDE.md"
+
 # 条件分岐による除外
 _exclude:
   - "{% if not install_claude %}.claude{% endif %}"
@@ -54,47 +59,3 @@ install_scripts:
     scripts/ ディレクトリをインストールしますか？
     （sync_templates.py）
   default: true
-
-# =============================================================================
-# Claude モデル・ターン数設定
-# =============================================================================
-
-claude_model:
-  type: str
-  help: |
-    Claude のデフォルトモデルを選択してください。
-    コメントで [sonnet] / [opus] / [haiku] を指定すると上書きできます。
-  default: "opus"
-  choices:
-    - "opus"
-    - "sonnet"
-    - "haiku"
-  when: "{{ install_workflows }}"
-
-implement_max_turns:
-  type: int
-  help: |
-    実装（implement）の最大ターン数を指定してください。
-  default: 1000
-  when: "{{ install_workflows }}"
-
-plan_max_turns:
-  type: int
-  help: |
-    プラン（plan）の最大ターン数を指定してください。
-  default: 50
-  when: "{{ install_workflows }}"
-
-review_max_turns:
-  type: int
-  help: |
-    レビュー（review）の最大ターン数を指定してください。
-  default: 30
-  when: "{{ install_workflows }}"
-
-breakdown_max_turns:
-  type: int
-  help: |
-    分解（breakdown）の最大ターン数を指定してください。
-  default: 100
-  when: "{{ install_workflows }}"
