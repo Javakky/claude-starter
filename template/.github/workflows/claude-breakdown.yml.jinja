@@ -61,7 +61,6 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
-          # 必要に応じてデフォルト値をオーバーライド
-          # default_model: 'opus'
-          # default_max_turns: 100
-{% endraw %}
+{% endraw %}          default_model: '{{ claude_model }}'
+          default_max_turns: '{{ breakdown_max_turns }}'
+

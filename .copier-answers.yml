@@ -8,3 +8,8 @@ install_claude: true
 install_workflows: true
 install_docs: true
 install_scripts: true
+claude_model: "opus"
+implement_max_turns: 1000
+plan_max_turns: 50
+review_max_turns: 30
+breakdown_max_turns: 100
