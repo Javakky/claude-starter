@@ -59,3 +59,19 @@ install_scripts:
     scripts/ ディレクトリをインストールしますか？
     （sync_templates.py）
   default: true
+
+# =============================================================================
+# 自動レビュー設定
+# =============================================================================
+
+auto_review_default_model:
+  type: str
+  help: |
+    PR 自動レビュー時のデフォルトモデルを選択してください。
+    コメントで [sonnet] / [opus] / [haiku] を指定すると上書きできます。
+  default: "haiku"
+  choices:
+    - "opus"
+    - "sonnet"
+    - "haiku"
+  when: "{{ install_workflows }}"
