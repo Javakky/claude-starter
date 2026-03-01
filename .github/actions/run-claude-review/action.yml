@@ -114,9 +114,10 @@ runs:
         else
           CODEX_PROMPT="$PROMPT"
         fi
-        echo "content<<EOF" >> $GITHUB_OUTPUT
+        EOF_MARKER="EOF_REVIEW_$(date +%s%N)"
+        echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
         echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
     - name: Run Codex
       if: inputs.mention_type == 'codex'

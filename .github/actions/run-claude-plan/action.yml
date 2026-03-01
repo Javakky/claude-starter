@@ -106,10 +106,11 @@ runs:
         # プロンプトファイルを読み込み、プレースホルダーを置換
         PROMPT=$(cat "$PROMPT_FILE" | sed "s/{{ISSUE_NUMBER}}/$ISSUE_NUMBER/g")
 
-        # 複数行の出力を GITHUB_OUTPUT に設定
-        echo "content<<EOF" >> $GITHUB_OUTPUT
+        # 複数行の出力を GITHUB_OUTPUT に設定（ランダムマーカーでデリミタ衝突を防止）
+        EOF_MARKER="EOF_PLAN_$(date +%s%N)"
+        echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
         echo "$PROMPT" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
     - name: Run Claude Plan Action (Custom token mode)
       if: inputs.mention_type == 'claude' && inputs.github_token != ''

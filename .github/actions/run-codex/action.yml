@@ -262,10 +262,11 @@ runs:
         【重要】作業完了後、作業内容のサマリーを \`.codex-summary.md\` に Markdown 形式で書き出してください。
         実装の場合は変更内容の概要を、相談・質問への回答の場合は結論を記述してください。"
 
-        # 複数行出力を GITHUB_OUTPUT に設定
-        echo "enriched_prompt<<CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+        # 複数行出力を GITHUB_OUTPUT に設定（ランダムマーカーでデリミタ衝突を防止）
+        EOF_MARKER="EOF_CODEX_PROMPT_$(date +%s%N)"
+        echo "enriched_prompt<<${EOF_MARKER}" >> $GITHUB_OUTPUT
         echo "$ENRICHED_PROMPT" >> $GITHUB_OUTPUT
-        echo "CODEX_PROMPT_EOF" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
     # 5. 進捗コメントの投稿
     - name: Codex 実行開始をコメント
@@ -335,14 +336,14 @@ runs:
         # GitHub 連携（コメント投稿・Issue 作成等）はワークフロー側のステップで行う。
 
         # Codex 実行（モデル・推論レベル指定がある場合はフラグを追加）
-        CODEX_ARGS="--full-auto"
+        CODEX_ARGS=(--full-auto)
         if [ -n "$MODEL" ]; then
-          CODEX_ARGS="$CODEX_ARGS --model $MODEL"
+          CODEX_ARGS+=(--model "$MODEL")
         fi
         if [ -n "$REASONING_EFFORT" ]; then
-          CODEX_ARGS="$CODEX_ARGS --reasoning-effort $REASONING_EFFORT"
+          CODEX_ARGS+=(--reasoning-effort "$REASONING_EFFORT")
         fi
-        if ! codex $CODEX_ARGS "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
+        if ! codex "${CODEX_ARGS[@]}" "$PROMPT" 2>&1 | tee /tmp/codex-output.txt; then
           echo "::error::Codex の実行に失敗しました。認証情報（API キーまたは auth.json）と入力プロンプトを確認してください。"
           exit 1
         fi
