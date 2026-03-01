@@ -74,8 +74,7 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/run-claude-review@master
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 必要なら上書き
-          # model: 'haiku'
-          # max_turns: '30'
+          comment_body: ${{ steps.prep.outputs.comment_body }}
+          model: 'opus'
+          max_turns: '30'
           # prompt: '/review'
-
