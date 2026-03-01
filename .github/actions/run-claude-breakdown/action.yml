@@ -220,12 +220,15 @@ runs:
           MILESTONE=$(jq -r ".[$i].milestone // \"${MILESTONE_TITLE}\"" .codex-issues.json)
 
           echo "Issue 作成中: ${TITLE}"
-          if NEW_ISSUE_URL=$(gh issue create --title "$TITLE" --body "$BODY" --milestone "$MILESTONE" 2>&1); then
+          BODY_FILE=$(mktemp)
+          echo "$BODY" > "$BODY_FILE"
+          if NEW_ISSUE_URL=$(gh issue create --title "$TITLE" --body-file "$BODY_FILE" --milestone "$MILESTONE" 2>&1); then
             echo "  作成成功: ${NEW_ISSUE_URL}"
             CREATED_ISSUES="${CREATED_ISSUES}\n- ${NEW_ISSUE_URL} ${TITLE}"
           else
             echo "::warning::Issue 作成に失敗しました: ${TITLE} - ${NEW_ISSUE_URL}"
           fi
+          rm -f "$BODY_FILE"
         done
 
         # 作成結果を元 Issue にコメント
@@ -235,7 +238,10 @@ runs:
         以下の Issue を作成し、Milestone 「${MILESTONE_TITLE}」に追加しました:
         $(echo -e "$CREATED_ISSUES")"
 
-          gh issue comment "$ISSUE_NUMBER" --body "$COMMENT_BODY" || echo "::warning::サマリーコメントの投稿に失敗しました"
+          COMMENT_BODY_FILE=$(mktemp)
+          echo "$COMMENT_BODY" > "$COMMENT_BODY_FILE"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$COMMENT_BODY_FILE" || echo "::warning::サマリーコメントの投稿に失敗しました"
+          rm -f "$COMMENT_BODY_FILE"
         fi
 
         # クリーンアップ

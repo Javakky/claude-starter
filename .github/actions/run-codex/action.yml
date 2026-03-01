@@ -376,7 +376,7 @@ runs:
 
     # 8. Codex 作業用ファイルのクリーンアップ（コミット前）
     - name: Codex 作業用ファイルのクリーンアップ
-      if: inputs.auto_commit == 'true'
+      if: always() && inputs.auto_commit == 'true'
       shell: bash
       env:
         CODEX_DIR_TRACKED: ${{ steps.codex_dir.outputs.tracked }}
