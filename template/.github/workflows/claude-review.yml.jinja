@@ -73,8 +73,17 @@ jobs:
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
-{% endraw %}          model: '{{ claude_model }}'
+          # mention_type: 空または auto で Claude 優先、トークンなしで Codex にフォールバック
+          mention_type: ${{ steps.prep.outputs.mention_type }}
+          issue_number: ${{ steps.prep.outputs.issue_number }}
+          pr_number: ${{ steps.prep.outputs.pr_number }}
+          head_ref: ${{ steps.prep.outputs.head_ref }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+{% endraw %}          model: '{{ auto_review_default_model }}'
           max_turns: '{{ review_max_turns }}'
-          # prompt: '/review'
+{% raw %}          # prompt: '/review'
+{% endraw %}

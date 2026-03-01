@@ -21,7 +21,7 @@ jobs:
   breakdown:
     if: |
       github.event.comment.user.type != 'Bot' &&
-      contains(github.event.comment.body, '@claude') &&
+      (contains(github.event.comment.body, '@claude') || contains(github.event.comment.body, '@codex')) &&
       contains(github.event.comment.body, '[breakdown]')
     runs-on: ubuntu-latest
     steps:
@@ -57,6 +57,10 @@ jobs:
           issue_number: ${{ steps.prep.outputs.issue_number }}
           milestone_number: ${{ steps.prep.outputs.milestone_number }}
           milestone_title: ${{ steps.prep.outputs.milestone_title }}
+          mention_type: ${{ steps.prep.outputs.mention_type }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
 {% endraw %}          default_model: '{{ claude_model }}'
           default_max_turns: '{{ breakdown_max_turns }}'
+

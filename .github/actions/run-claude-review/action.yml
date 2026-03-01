@@ -2,9 +2,37 @@ name: "Run Claude Review"
 description: "Runs the Claude Code Action for PR reviews"
 
 inputs:
+  github_token:
+    description: "GitHub token"
+    required: false
   claude_code_oauth_token:
-    description: "Claude Code OAuth Token"
-    required: true
+    description: "Claude Code OAuth Token（mention_type が claude の場合に使用）"
+    required: false
+    default: ""
+  codex_code_oauth_token:
+    description: "Codex Code OAuth Token / API キー（mention_type が codex の場合に使用）"
+    required: false
+    default: ""
+  codex_auth_json:
+    description: "Codex 認証情報（auth.json の Base64 エンコード値）"
+    required: false
+    default: ""
+  mention_type:
+    description: "メンションの種類（claude, codex, auto）。auto の場合は Claude 優先でトークンの有無によりフォールバック"
+    required: false
+    default: "auto"
+  issue_number:
+    description: "Issue/PR 番号（Codex のコメント投稿に使用）"
+    required: false
+    default: ""
+  pr_number:
+    description: "PR 番号（Codex の PR コンテキスト取得に使用）"
+    required: false
+    default: ""
+  head_ref:
+    description: "PR の head ブランチ名（Codex のブランチリンク表示に使用）"
+    required: false
+    default: ""
   comment_body:
     description: "トリガーとなったコメントの本文（モデル・ターン数の解決に使用）。コメントによる発火時のみ有効"
     required: false
@@ -12,7 +40,7 @@ inputs:
   model:
     description: "Claude model (sonnet/opus/haiku)"
     required: false
-    default: "opus"
+    default: "haiku"
   max_turns:
     description: "Max turns"
     required: false
@@ -29,7 +57,59 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # mention_type の解決（auto の場合は Claude 優先でフォールバック）
+    - name: Resolve mention type
+      id: resolve
+      shell: bash
+      env:
+        INPUT_MENTION_TYPE: ${{ inputs.mention_type }}
+        CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
+        CODEX_AUTH: ${{ inputs.codex_auth_json }}
+      run: |
+        HAS_CLAUDE="false"
+        HAS_CODEX="false"
+        [ -n "$CLAUDE_TOKEN" ] && HAS_CLAUDE="true"
+        [ -n "$CODEX_TOKEN" ] || [ -n "$CODEX_AUTH" ] && HAS_CODEX="true"
+
+        # 空文字列は auto として扱う
+        [ -z "$INPUT_MENTION_TYPE" ] && INPUT_MENTION_TYPE="auto"
+
+        # 明示的に指定された場合はそのまま使用
+        if [ "$INPUT_MENTION_TYPE" = "claude" ]; then
+          if [ "$HAS_CLAUDE" != "true" ]; then
+            echo "::error::mention_type=claude が指定されましたが、claude_code_oauth_token がありません"
+            exit 1
+          fi
+          echo "mention_type=claude" >> $GITHUB_OUTPUT
+          echo "mention_type: claude（明示指定）"
+          exit 0
+        fi
+
+        if [ "$INPUT_MENTION_TYPE" = "codex" ]; then
+          if [ "$HAS_CODEX" != "true" ]; then
+            echo "::error::mention_type=codex が指定されましたが、codex_code_oauth_token または codex_auth_json がありません"
+            exit 1
+          fi
+          echo "mention_type=codex" >> $GITHUB_OUTPUT
+          echo "mention_type: codex（明示指定）"
+          exit 0
+        fi
+
+        # auto モード: Claude 優先でフォールバック
+        if [ "$HAS_CLAUDE" = "true" ]; then
+          echo "mention_type=claude" >> $GITHUB_OUTPUT
+          echo "mention_type: claude（auto）"
+        elif [ "$HAS_CODEX" = "true" ]; then
+          echo "mention_type=codex" >> $GITHUB_OUTPUT
+          echo "mention_type: codex（auto - Claude トークンなし、Codex にフォールバック）"
+        else
+          echo "::error::使用可能なトークンがありません（claude_code_oauth_token または codex_code_oauth_token/codex_auth_json が必要）"
+          exit 1
+        fi
+
     - name: Resolve Claude options
+      if: steps.resolve.outputs.mention_type == 'claude'
       id: opts
       uses: actions/github-script@v7
       env:
@@ -50,6 +130,7 @@ runs:
           core.setOutput("max_turns", String(maxTurns));
 
     - name: Run Claude Review Action
+      if: steps.resolve.outputs.mention_type == 'claude'
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -60,3 +141,35 @@ runs:
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}
           --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+
+    - name: Build Codex review prompt
+      if: steps.resolve.outputs.mention_type == 'codex'
+      id: codex_prompt
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+      run: |
+        # /review は Claude 固有のコマンドのため、Codex 用のレビュープロンプトに変換
+        if [ "$PROMPT" = "/review" ]; then
+          CODEX_PROMPT="この PR の変更内容をレビューしてください。バグ、セキュリティ問題、パフォーマンスの問題、コードの品質について確認し、改善提案を含むレビューコメントを投稿してください。"
+        else
+          CODEX_PROMPT="$PROMPT"
+        fi
+        EOF_MARKER="EOF_REVIEW_$(date +%s%N)"
+        echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
+        echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
+
+    - name: Run Codex
+      if: steps.resolve.outputs.mention_type == 'codex'
+      uses: ./.github/actions/run-codex
+      with:
+        codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
+        codex_auth_json: ${{ inputs.codex_auth_json }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.codex_prompt.outputs.content }}
+        comment_body: ${{ inputs.comment_body }}
+        issue_number: ${{ inputs.issue_number }}
+        pr_number: ${{ inputs.pr_number }}
+        head_ref: ${{ inputs.head_ref }}
+        auto_commit: "false"
