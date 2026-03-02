@@ -89,6 +89,8 @@ jobs:
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           claude_github_token: ${{ secrets.CLAUDE_GITHUB_TOKEN }}
           codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          codex_app_id: ${{ secrets.CODEX_APP_ID }}
+          codex_app_private_key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
 {% endraw %}          default_model: '{{ claude_model }}'
           default_max_turns: '{{ implement_max_turns }}'
 {% raw %}          # allowed_tools: |

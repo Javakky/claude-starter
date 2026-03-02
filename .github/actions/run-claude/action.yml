@@ -28,6 +28,14 @@ inputs:
     description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
     required: false
     default: ""
+  codex_app_id:
+    description: "Codex 用 GitHub App ID（App トークンで push すると後続ワークフローがトリガーされる）"
+    required: false
+    default: ""
+  codex_app_private_key:
+    description: "Codex 用 GitHub App の秘密鍵（PEM 形式）"
+    required: false
+    default: ""
   mention_type:
     description: "メンションの種類（claude または codex）"
     required: false
@@ -152,6 +160,8 @@ runs:
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
         bot_github_token: ${{ inputs.codex_github_token }}
+        app_id: ${{ inputs.codex_app_id }}
+        app_private_key: ${{ inputs.codex_app_private_key }}
         prompt: ${{ inputs.comment_body }}
         comment_body: ${{ inputs.comment_body }}
         issue_number: ${{ inputs.issue_number }}
