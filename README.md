@@ -40,9 +40,12 @@ copier copy gh:Javakky/claude-starter . --defaults
 ## 🔑 セットアップ
 
 利用には **Claude App** の導入と **Claude Code OAuth Token** が必要です。
+Codex を併用する場合は追加の設定が必要です（後述）。
 
 ### 1. GitHub App の導入
 GitHub 上で **[Claude App](https://github.com/apps/claude)** をリポジトリに追加してください。これを行わないと、Claude が Issue や PR に反応できません。
+
+Codex を使用する場合は、**[Codex App](https://github.com/apps/codex)** も追加してください（`@codex` メンションに反応するため）。
 
 ### 2. トークンの取得
 ターミナルで以下のコマンドを実行し、ブラウザ認証を行ってください。
@@ -54,11 +57,27 @@ claude login
 ### 3. GitHub Secrets への登録
 リポジトリの `Settings` > `Secrets and variables` > `Actions` に移動し、以下のシークレットを登録します。
 
-- **Name**: `CLAUDE_CODE_OAUTH_TOKEN`
-- **Value**: あなたの Claude Code OAuth トークンを入力します。
+#### Claude（必須）
+
+| Name | 説明 |
+|------|------|
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code の OAuth トークン |
+
+#### Codex（オプション）
+
+`@codex` メンションを使用する場合は、以下のいずれかを登録してください。
+
+| Name | 説明 |
+|------|------|
+| `CODEX_CODE_OAUTH_TOKEN` | Codex（OpenAI）の API キー |
+| `CODEX_AUTH_JSON` | Codex の認証情報（`auth.json` を Base64 エンコードした値）。API キーの代わりに使用可能 |
+
+> **Note**: `CODEX_CODE_OAUTH_TOKEN` と `CODEX_AUTH_JSON` はどちらか一方のみで動作します。両方が設定されている場合は `CODEX_AUTH_JSON` が優先されます。
 
 ### 4. 試してみる
 Issueを作成し、`@claude こんにちは！` とコメントして、Claudeが応答するか確認してみましょう。
+
+Codex を設定済みの場合は、`@codex こんにちは！` でも試すことができます。
 
 ### 5. テンプレートの更新
 
@@ -104,6 +123,25 @@ copier update
     *   🔄 再レビュー: `@claude [review]`
 
 --- 
+
+## 🔀 Codex 連携（オプション）
+
+`@codex` メンションを使うと、OpenAI の Codex CLI でタスクを実行できます。Claude と同じワークフローで動作し、`mention_type` に応じてトークンが自動的に切り替わります。
+
+| メンション | 使用される AI | トークン |
+| :--- | :--- | :--- |
+| `@claude` | Claude Code | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `@codex` | Codex CLI | `CODEX_CODE_OAUTH_TOKEN` または `CODEX_AUTH_JSON` |
+
+自動レビュー（PR 作成時）では、Claude トークンがあれば Claude が優先され、Claude トークンがない場合は Codex にフォールバックします。
+
+### Codex で使えるコマンドオプション
+
+| オプション | 説明 | 例 |
+| :--- | :--- | :--- |
+| `[model=NAME]` | Codex で使用するモデルを指定 | `@codex [model=o4-mini]` |
+| `[o4-mini]` / `[o3]` 等 | モデル名のショートカット | `@codex [o3] 実装して` |
+| `[thinking=LEVEL]` | 推論レベルを指定（`low` / `medium` / `high`） | `@codex [thinking=high]` |
 
 ## 💬 コマンドオプション
 
