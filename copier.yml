@@ -38,7 +38,7 @@ install_workflows:
   type: bool
   help: |
     GitHub Workflows をインストールしますか？
-    （claude.yml, claude-review.yml など）
+    （agent.yml, agent-review.yml など）
   default: true
 
 install_docs:

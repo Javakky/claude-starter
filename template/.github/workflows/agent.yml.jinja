@@ -1,5 +1,5 @@
-{% raw %}name: Claude Implement
-run-name: "claude-impl issue #${{ github.event.issue.number }}"
+{% raw %}name: Agent Implement
+run-name: "agent-impl issue #${{ github.event.issue.number }}"
 
 on:
   issue_comment:
@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: >-
-    claude-impl-${{ github.event.issue.number }}
+    agent-impl-${{ github.event.issue.number }}
     -${{ contains(github.event.comment.body, '[review]') && 'review' || 'implement' }}
     -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # ローカル action を読むために checkout は必要
-      # ここではデフォルトブランチを取る（issue起点 implement は Claude 側がブランチ作成する想定）
+      # ここではデフォルトブランチを取る（issue起点 implement はエージェント側がブランチ作成する想定）
       - name: Checkout repository to access local actions
         uses: actions/checkout@v4
         with:
@@ -41,14 +41,14 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/prepare-claude-context{% endraw %}{{ ref }}{% raw %}
         with:
           mode: "implement"
-          impl_workflow_id: claude.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
+          impl_workflow_id: agent.yml # ←この workflow ファイル名に合わせる（ファイル名変えるならここも変える）
 
-      # PR上の@claude(implement)であれば、そのPRの review を止めたい（任意）
+      # PR上のメンション(implement)であれば、そのPRの review を止めたい（任意）
       - name: Cancel running reviews for this PR
         if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number != ''
         uses: Javakky/claude-starter/.github/actions/cancel-claude-runs{% endraw %}{{ ref }}{% raw %}
         with:
-          workflow_id: claude-review.yml
+          workflow_id: agent-review.yml
           pr_number: ${{ steps.prep.outputs.pr_number }}
           head_ref: ${{ steps.prep.outputs.head_ref }}
           head_sha: ${{ steps.prep.outputs.head_sha }}
@@ -73,11 +73,11 @@ jobs:
       #   run: npm install
       # ------------------------------------
 
-      - name: Run Claude (implement)
+      - name: Run Agent (implement)
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude{% endraw %}{{ ref }}{% raw %}
         with:
-          # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
+          # Issue起点でもPR起点でも、メンションを含む本文がそのままエージェントに渡る
           github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
           mention_type: ${{ steps.prep.outputs.mention_type }}
@@ -87,6 +87,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          codex_app_id: ${{ secrets.CODEX_APP_ID }}
+          codex_app_private_key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
 {% endraw %}          default_model: '{{ claude_model }}'
           default_max_turns: '{{ implement_max_turns }}'
 {% raw %}          # allowed_tools: |

@@ -1,5 +1,5 @@
-{% raw %}name: Claude Plan
-run-name: "claude-plan issue #${{ github.event.issue.number }}"
+{% raw %}name: Agent Plan
+run-name: "agent-plan issue #${{ github.event.issue.number }}"
 
 on:
   issue_comment:
@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: >-
-    claude-plan-${{ github.event.issue.number }}
+    agent-plan-${{ github.event.issue.number }}
     -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
   cancel-in-progress: true
 
@@ -35,7 +35,7 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/prepare-claude-context{% endraw %}{{ ref }}{% raw %}
         with:
           mode: "plan"
-          impl_workflow_id: claude.yml # ←implement ワークフローのファイル名に合わせる
+          impl_workflow_id: agent.yml # ←implement ワークフローのファイル名に合わせる
           allowed_comment_permissions: "admin,maintain,write"
           max_workflow_runs_to_scan: "50"
 
@@ -47,7 +47,7 @@ jobs:
           echo "issue_number=${{ steps.prep.outputs.issue_number }}"
           echo "issue_url=${{ steps.prep.outputs.issue_url }}"
 
-      - name: Run Claude (plan)
+      - name: Run Agent (plan)
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-plan{% endraw %}{{ ref }}{% raw %}
         with:
@@ -58,5 +58,6 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
 {% endraw %}          default_model: '{{ claude_model }}'
           default_max_turns: '{{ plan_max_turns }}'

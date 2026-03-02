@@ -29,6 +29,10 @@ inputs:
     description: "Codex 認証情報（auth.json の Base64 エンコード値）"
     required: false
     default: ""
+  codex_github_token:
+    description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
+    required: false
+    default: ""
   mention_type:
     description: "メンションの種類（claude または codex）"
     required: false
@@ -124,21 +128,8 @@ runs:
         echo "$PROMPT" >> $GITHUB_OUTPUT
         echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
-    - name: Run Claude Breakdown Action (Custom token mode)
-      if: inputs.mention_type == 'claude' && inputs.github_token != ''
-      uses: anthropics/claude-code-action@v1
-      with:
-        github_token: ${{ inputs.github_token }}
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        prompt: ${{ steps.prompt.outputs.content }}
-        claude_args: >-
-          --model ${{ steps.opts.outputs.model }}
-          --max-turns ${{ steps.opts.outputs.max_turns }}
-          --allowedTools "Bash(gh issue create:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Read,Glob,Grep"
-          ${{ steps.tools.outputs.tools }}
-
-    - name: Run Claude Breakdown Action (App mode)
-      if: inputs.mention_type == 'claude' && inputs.github_token == ''
+    - name: Run Claude Breakdown Action
+      if: inputs.mention_type == 'claude'
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -196,6 +187,7 @@ ${CODEX_SUFFIX}"
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
+        bot_github_token: ${{ inputs.codex_github_token }}
         prompt: ${{ steps.codex_prompt.outputs.content }}
         comment_body: ${{ inputs.comment_body }}
         issue_number: ${{ inputs.issue_number }}
@@ -207,7 +199,7 @@ ${CODEX_SUFFIX}"
       if: inputs.mention_type == 'codex'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ inputs.codex_github_token || inputs.github_token }}
         MILESTONE_TITLE: ${{ inputs.milestone_title }}
         ISSUE_NUMBER: ${{ inputs.issue_number }}
       run: |

@@ -7,7 +7,7 @@ inputs:
     required: true
 
   impl_workflow_id:
-    description: "implementモードのワークフローがすでに実行中かどうかをチェックするための、ワークフローのファイル名またはIDです（e.g. claude.yml）"
+    description: "implementモードのワークフローがすでに実行中かどうかをチェックするための、ワークフローのファイル名またはIDです（e.g. agent.yml）"
     required: true
 
   skip_commit_prefixes:
@@ -36,6 +36,10 @@ inputs:
     description: "新しいブランチを作成する際の元となるブランチ名です（e.g. master/main）"
     required: false
     default: "master"
+  final_sync_commit_marker:
+    description: "実装の最終同期コミットを識別するためのマーカー文字列です。コミットメッセージにこの文字列が含まれていれば、sender が Bot でなくても実装中のレビューを許可します"
+    required: false
+    default: ""
 
 outputs:
   should_run:
@@ -97,6 +101,7 @@ runs:
 
         ISSUE_BRANCH_PREFIX: ${{ inputs.issue_branch_prefix }}
         COMPARE_BASE_BRANCH: ${{ inputs.compare_base_branch }}
+        FINAL_SYNC_COMMIT_MARKER: ${{ inputs.final_sync_commit_marker }}
       with:
         script: |
           const modeRaw = process.env.MODE;
@@ -111,6 +116,7 @@ runs:
             .filter(Boolean);
 
           const allowFinalSync = String(process.env.ALLOW_FINAL_SYNC_DURING_IMPL || 'true').toLowerCase() === 'true';
+          const finalSyncMarker = String(process.env.FINAL_SYNC_COMMIT_MARKER || '').trim();
 
           const allowedPerms = new Set(
             String(process.env.ALLOWED_COMMENT_PERMISSIONS || 'admin,maintain,write')
@@ -153,7 +159,7 @@ runs:
           const skip = (reason, extra = {}) => setOut({ should_run: false, reason, ...extra });
           const ok = (extra = {}) => setOut({ should_run: true, reason: '', ...extra });
 
-          /** 実行中の対象のワークフロー (claude.yml) の一覧を取得する */
+          /** 実行中の対象のワークフロー (agent.yml) の一覧を取得する */
           async function listRunsForWorkflow(workflowId, perPage) {
             const res = await github.request(
               'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
@@ -288,7 +294,11 @@ runs:
             if (implementing) {
               const isSync = context.payload.action === 'synchronize';
               const senderType = String(context.payload.sender?.type || '');
-              const allow = allowFinalSync && isSync && (senderType === 'Bot');
+              let allow = allowFinalSync && isSync && (senderType === 'Bot');
+              // sender が Bot でない場合でも、コミットメッセージにマーカーが含まれていれば許可
+              if (!allow && allowFinalSync && isSync && finalSyncMarker && headCommitMsg.includes(finalSyncMarker)) {
+                allow = true;
+              }
               if (!allow) {
                 return skip('implement-running', { issue_number: prNumber, pr_number: prNumber, head_sha: headSha, head_ref: headRef, trigger_kind: triggerKind });
               }

@@ -3,7 +3,7 @@ description: "Cancel queued/in_progress workflow runs for a given workflow, matc
 
 inputs:
   workflow_id:
-    description: "Workflow file name or ID to cancel (e.g. claude-review.yml)"
+    description: "Workflow file name or ID to cancel (e.g. agent-review.yml)"
     required: true
   pr_number:
     description: "PR number (string/number). Optional but recommended."

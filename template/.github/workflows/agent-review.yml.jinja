@@ -1,5 +1,5 @@
-{% raw %}name: Claude Review
-run-name: "claude-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
+{% raw %}name: Agent Review
+run-name: "agent-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: >-
-    claude-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+    agent-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
     -${{ github.event_name == 'pull_request' && 'pr' || 'comment' }}
     -${{ github.event_name == 'issue_comment' && (github.event.comment.user.type == 'Bot' && 'bot' || 'user') || 'na' }}
   cancel-in-progress: true
@@ -36,14 +36,14 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/prepare-claude-context{% endraw %}{{ ref }}{% raw %}
         with:
           mode: "review"
-          # implement-running gate 用（あなたの implement workflow ファイル名に合わせる）
-          impl_workflow_id: claude.yml
+          # implement-running gate 用（implement workflow ファイル名に合わせる）
+          impl_workflow_id: agent.yml
 
           # pr-sync skip rules
           skip_commit_prefixes: "docs:,style:,chore:,wip:"
           allow_final_sync_during_impl: "true"
-          # senderがBotじゃないケースに備えるなら marker を入れる（運用でClaude最終commitに付ける）
-          final_sync_commit_marker: "[claude-final]"
+          # senderがBotじゃないケースに備えるなら marker を入れる（運用でエージェント最終commitに付ける）
+          final_sync_commit_marker: "[agent-final]"
 
           allowed_comment_permissions: "admin,maintain,write"
           max_workflow_runs_to_scan: "50"
@@ -69,13 +69,13 @@ jobs:
           ref: ${{ steps.prep.outputs.head_sha }}
           fetch-depth: 0
 
-      - name: Run Claude Review
+      - name: Run Agent Review
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
           github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
-          # mention_type: 空または auto で Claude 優先、トークンなしで Codex にフォールバック
+          # mention_type: 空または auto でエージェント選択、トークンなしでフォールバック
           mention_type: ${{ steps.prep.outputs.mention_type }}
           issue_number: ${{ steps.prep.outputs.issue_number }}
           pr_number: ${{ steps.prep.outputs.pr_number }}
@@ -83,6 +83,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
 {% endraw %}          model: '{{ claude_model }}'
           max_turns: '{{ review_max_turns }}'
 {% raw %}          # prompt: '/review'

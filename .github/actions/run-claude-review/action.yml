@@ -17,6 +17,10 @@ inputs:
     description: "Codex 認証情報（auth.json の Base64 エンコード値）"
     required: false
     default: ""
+  codex_github_token:
+    description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
+    required: false
+    default: ""
   mention_type:
     description: "メンションの種類（claude, codex, auto）。auto の場合は Claude 優先でトークンの有無によりフォールバック"
     required: false
@@ -167,6 +171,7 @@ runs:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
         github_token: ${{ inputs.github_token }}
+        bot_github_token: ${{ inputs.codex_github_token }}
         prompt: ${{ steps.codex_prompt.outputs.content }}
         comment_body: ${{ inputs.comment_body }}
         issue_number: ${{ inputs.issue_number }}
