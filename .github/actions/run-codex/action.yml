@@ -171,6 +171,12 @@ runs:
         GH_TOKEN: ${{ steps.app_token.outputs.token || inputs.bot_github_token || inputs.github_token }}
         BOT_LOGIN: ${{ inputs.git_user_name }}
       run: |
+        # BOT_LOGIN のサニタイズ（GitHub ユーザー名として有効な文字のみ許可）
+        if [[ ! "$BOT_LOGIN" =~ ^[a-zA-Z0-9\[\]._-]+$ ]]; then
+          echo "::error::git_user_name に無効な文字が含まれています: ${BOT_LOGIN}"
+          exit 1
+        fi
+
         # GitHub API で bot ユーザーの ID を取得し、正しい noreply メールを構築
         BOT_ID=""
         if [ -n "$GH_TOKEN" ]; then
@@ -518,7 +524,9 @@ Co-authored-by: ${BOT_LOGIN} <${GIT_EMAIL}>" || {
         # GITHUB_TOKEN で push すると後続ワークフロー（レビュー等）がトリガーされない（GitHub の仕様）
         # App トークンまたは bot_github_token が利用可能な場合、push 時の認証を差し替える
         if [ -n "$PUSH_TOKEN" ]; then
+          echo "::add-mask::${PUSH_TOKEN}"
           AUTH_BASE64=$(echo -n "x-access-token:${PUSH_TOKEN}" | base64 -w 0)
+          echo "::add-mask::${AUTH_BASE64}"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH_BASE64}"
           echo "push 認証を差し替えました（後続ワークフローのトリガーが有効化されます）"
         fi

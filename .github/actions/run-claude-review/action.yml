@@ -17,10 +17,6 @@ inputs:
     description: "Codex 認証情報（auth.json の Base64 エンコード値）"
     required: false
     default: ""
-  claude_github_token:
-    description: "Claude ボットユーザー専用の GitHub トークン（Claude が gh CLI で使用）。未指定時は github_token にフォールバック"
-    required: false
-    default: ""
   codex_github_token:
     description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
     required: false
@@ -137,22 +133,8 @@ runs:
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
 
-    - name: Run Claude Review Action (Custom token mode)
-      if: steps.resolve.outputs.mention_type == 'claude' && inputs.claude_github_token != ''
-      uses: anthropics/claude-code-action@v1
-      with:
-        github_token: ${{ inputs.claude_github_token }}
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        prompt: "${{ inputs.prompt }}"
-        track_progress: true
-        allowed_bots: "${{ inputs.allowed_bots }}"
-        claude_args: |
-          --model ${{ steps.opts.outputs.model }}
-          --max-turns ${{ steps.opts.outputs.max_turns }}
-          --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
-
-    - name: Run Claude Review Action (App mode)
-      if: steps.resolve.outputs.mention_type == 'claude' && inputs.claude_github_token == ''
+    - name: Run Claude Review Action
+      if: steps.resolve.outputs.mention_type == 'claude'
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}

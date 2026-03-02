@@ -43,7 +43,7 @@ jobs:
           skip_commit_prefixes: "docs:,style:,chore:,wip:"
           allow_final_sync_during_impl: "true"
           # senderがBotじゃないケースに備えるなら marker を入れる（運用でエージェント最終commitに付ける）
-          final_sync_commit_marker: "[claude-final]"
+          final_sync_commit_marker: "[agent-final]"
 
           allowed_comment_permissions: "admin,maintain,write"
           max_workflow_runs_to_scan: "50"
@@ -83,7 +83,6 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
-          claude_github_token: ${{ secrets.CLAUDE_GITHUB_TOKEN }}
           codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
 {% endraw %}          model: '{{ claude_model }}'
           max_turns: '{{ review_max_turns }}'
