@@ -5,6 +5,13 @@ _min_copier_version: "9.0.0"
 _subdirectory: template
 _answers_file: .copier-answers.yml
 
+# 既に存在する場合はスキップ（copier update で上書きしない）
+_skip_if_exists:
+  - ".github/workflows/agent.yml"
+  - ".github/workflows/agent-review.yml"
+  - ".github/workflows/agent-plan.yml"
+  - ".github/workflows/agent-breakdown.yml"
+
 # 条件分岐による除外
 _exclude:
   - "{% if not install_claude %}.claude{% endif %}"
@@ -38,7 +45,7 @@ install_workflows:
   type: bool
   help: |
     GitHub Workflows をインストールしますか？
-    （agent.yml, agent-review.yml など）
+    （agent.yml, agent-review.yml, agent-plan.yml, agent-breakdown.yml）
   default: true
 
 install_docs:
