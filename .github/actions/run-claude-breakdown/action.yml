@@ -221,7 +221,7 @@ ${CODEX_SUFFIX}"
         for i in $(seq 0 $((ISSUE_COUNT - 1))); do
           TITLE=$(jq -r ".[$i].title" .codex-issues.json)
           BODY=$(jq -r ".[$i].body" .codex-issues.json)
-          MILESTONE=$(jq -r ".[$i].milestone // \"${MILESTONE_TITLE}\"" .codex-issues.json)
+          MILESTONE=$(jq -r --arg default "${MILESTONE_TITLE}" ".[$i].milestone // \$default" .codex-issues.json)
 
           echo "Issue 作成中: ${TITLE}"
           BODY_FILE=$(mktemp)
