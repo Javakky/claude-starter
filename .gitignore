@@ -3,5 +3,6 @@
 # Codex 一時ファイル
 .codex-commit-msg
 .codex-summary.md
+.codex-last-message.md
 .codex-issues.json
 .codex-output.log

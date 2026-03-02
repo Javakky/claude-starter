@@ -69,8 +69,8 @@ runs:
       run: |
         HAS_CLAUDE="false"
         HAS_CODEX="false"
-        [ -n "$CLAUDE_TOKEN" ] && HAS_CLAUDE="true"
-        [ -n "$CODEX_TOKEN" ] || [ -n "$CODEX_AUTH" ] && HAS_CODEX="true"
+        if [ -n "$CLAUDE_TOKEN" ]; then HAS_CLAUDE="true"; fi
+        if [ -n "$CODEX_TOKEN" ] || [ -n "$CODEX_AUTH" ]; then HAS_CODEX="true"; fi
 
         # 空文字列は auto として扱う
         [ -z "$INPUT_MENTION_TYPE" ] && INPUT_MENTION_TYPE="auto"
