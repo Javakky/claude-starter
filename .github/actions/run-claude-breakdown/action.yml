@@ -111,9 +111,12 @@ runs:
         fi
 
         # プロンプトファイルを読み込み、プレースホルダーを置換
+        # sed の s コマンドはデリミタ文字（/ & 等）を含む値でインジェクションが発生するため、
+        # ISSUE_NUMBER（数値のみ）は sed で安全に置換し、
+        # MILESTONE_TITLE（任意文字列）は bash のパラメータ展開で安全に置換する
         PROMPT=$(cat "$PROMPT_FILE" | \
-          sed "s/{{ISSUE_NUMBER}}/$ISSUE_NUMBER/g" | \
-          sed "s/{{MILESTONE_TITLE}}/$MILESTONE_TITLE/g")
+          sed "s/{{ISSUE_NUMBER}}/${ISSUE_NUMBER}/g")
+        PROMPT="${PROMPT//\{\{MILESTONE_TITLE\}\}/${MILESTONE_TITLE}}"
 
         # 複数行の出力を GITHUB_OUTPUT に設定（ランダムマーカーでデリミタ衝突を防止）
         EOF_MARKER="EOF_BREAKDOWN_$(date +%s%N)"
