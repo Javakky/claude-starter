@@ -53,6 +53,7 @@ jobs:
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-breakdown{% endraw %}{{ ref }}{% raw %}
         with:
+          github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
           issue_number: ${{ steps.prep.outputs.issue_number }}
           milestone_number: ${{ steps.prep.outputs.milestone_number }}

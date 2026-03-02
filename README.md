@@ -126,7 +126,9 @@ copier update
 
 ## 🔀 Codex 連携（オプション）
 
-`@codex` メンションを使うと、OpenAI の Codex CLI でタスクを実行できます。Claude と同じワークフローで動作し、`mention_type` に応じてトークンが自動的に切り替わります。
+`@codex` メンションを使うと、OpenAI の [Codex CLI](https://github.com/openai/codex) でタスクを実行できます。Claude と同じワークフローで動作し、`mention_type` に応じてトークンが自動的に切り替わります。
+
+> **参考**: [OpenAI 公式モデル一覧](https://platform.openai.com/docs/models) / [Codex CLI ドキュメント](https://platform.openai.com/docs/guides/codex)
 
 | メンション | 使用される AI | トークン |
 | :--- | :--- | :--- |
@@ -140,7 +142,7 @@ copier update
 | オプション | 説明 | 例 |
 | :--- | :--- | :--- |
 | `[model=NAME]` | Codex で使用するモデルを指定 | `@codex [model=gpt-5.2-codex]` |
-| `[o4-mini]` / `[gpt-5.2-codex]` 等 | モデル名のショートカット | `@codex [gpt-5.2-codex] 実装して` |
+| `[o4-mini]` / `[gpt-5.3-codex]` 等 | モデル名のショートカット | `@codex [gpt-5.3-codex] 実装して` |
 | `[thinking=LEVEL]` | 推論レベルを指定（`low` / `medium` / `high`） | `@codex [thinking=high]` |
 
 ## 💬 コマンドオプション

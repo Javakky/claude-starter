@@ -78,6 +78,7 @@ jobs:
         uses: Javakky/claude-starter/.github/actions/run-claude{% endraw %}{{ ref }}{% raw %}
         with:
           # Issue起点でもPR起点でも、@claude を含む本文がそのままClaudeに渡る
+          github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
           mention_type: ${{ steps.prep.outputs.mention_type }}
           issue_number: ${{ steps.prep.outputs.issue_number }}

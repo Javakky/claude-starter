@@ -52,7 +52,7 @@ inputs:
   default_model:
     description: "デフォルトの Codex モデル（コメントで指定がなく、model も未指定の場合に使用）"
     required: false
-    default: "o4-mini"
+    default: "gpt-5.3-codex"
   reasoning_effort:
     description: "o-series モデルの推論レベル（low, medium, high）。空の場合はデフォルト"
     required: false
@@ -91,7 +91,7 @@ runs:
         script: |
           const body = process.env.COMMENT_BODY || "";
           const explicitModel = process.env.EXPLICIT_MODEL || "";
-          const defaultModel = process.env.DEFAULT_MODEL || "o4-mini";
+          const defaultModel = process.env.DEFAULT_MODEL || "gpt-5.3-codex";
           const explicitReasoning = process.env.EXPLICIT_REASONING || "";
 
           // 優先順位: 明示指定 > コメント本文 > デフォルトモデル

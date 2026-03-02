@@ -51,6 +51,7 @@ jobs:
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-plan{% endraw %}{{ ref }}{% raw %}
         with:
+          github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
           issue_number: ${{ steps.prep.outputs.issue_number }}
           mention_type: ${{ steps.prep.outputs.mention_type }}

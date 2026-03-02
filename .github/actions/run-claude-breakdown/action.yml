@@ -239,8 +239,8 @@ ${CODEX_SUFFIX}"
         if [ -n "$CREATED_ISSUES" ]; then
           COMMENT_BODY="## タスク分解が完了しました（Codex）
 
-        以下の Issue を作成し、Milestone 「${MILESTONE_TITLE}」に追加しました:
-        $(echo -e "$CREATED_ISSUES")"
+以下の Issue を作成し、Milestone 「${MILESTONE_TITLE}」に追加しました:
+$(echo -e "$CREATED_ISSUES")"
 
           COMMENT_BODY_FILE=$(mktemp)
           echo "$COMMENT_BODY" > "$COMMENT_BODY_FILE"
