@@ -158,23 +158,27 @@ runs:
         # Codex 用のプロンプトに Issue 作成の補助指示を追加
         # Codex の --full-auto サンドボックスではネットワークがブロックされるため、
         # gh CLI は使用できない。JSON ファイル出力でワークフロー側が Issue を作成する
+        read -r -d '' CODEX_SUFFIX << 'PROMPT_END' || true
+---
+【重要: Issue 作成について】
+Codex のサンドボックス環境では `gh` コマンドは使用できません。
+代わりに、以下の JSON 形式で `.codex-issues.json` ファイルに書き出してください。
+ワークフローが自動的にこの JSON を読み取り、Issue を作成します。
+
+```json
+[
+  {
+    "title": "Issue タイトル",
+    "body": "Issue 本文（Markdown）",
+    "milestone": "MILESTONE_PLACEHOLDER"
+  }
+]
+```
+PROMPT_END
+        CODEX_SUFFIX="${CODEX_SUFFIX//MILESTONE_PLACEHOLDER/${MILESTONE_TITLE}}"
         CODEX_PROMPT="${ORIGINAL_PROMPT}
 
-        ---
-        【重要: Issue 作成について】
-        Codex のサンドボックス環境では \`gh\` コマンドは使用できません。
-        代わりに、以下の JSON 形式で \`.codex-issues.json\` ファイルに書き出してください。
-        ワークフローが自動的にこの JSON を読み取り、Issue を作成します。
-
-        \`\`\`json
-        [
-          {
-            \"title\": \"Issue タイトル\",
-            \"body\": \"Issue 本文（Markdown）\",
-            \"milestone\": \"${MILESTONE_TITLE}\"
-          }
-        ]
-        \`\`\`"
+${CODEX_SUFFIX}"
 
         EOF_MARKER="EOF_CODEX_BREAKDOWN_$(date +%s%N)"
         echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT

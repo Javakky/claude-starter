@@ -279,7 +279,7 @@ Conventional Commits 形式（例: feat: xxx, fix: xxx）で記述してくだ�
     - name: Install Codex CLI
       shell: bash
       run: |
-        npm install -g @openai/codex 2>/dev/null || npm install -g @openai/codex
+        npm install -g @openai/codex@^0.1 2>/dev/null || npm install -g @openai/codex@^0.1
 
     # 7. 認証設定
     - name: Setup Codex authentication
