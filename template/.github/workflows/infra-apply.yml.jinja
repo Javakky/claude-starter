@@ -1,0 +1,31 @@
+{% raw %}name: Terraform Apply
+run-name: "terraform apply (手動実行・承認必須)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Terraform をセットアップ
+        uses: hashicorp/setup-terraform@v3
+
+      - name: terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: terraform apply
+        working-directory: infra
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: terraform apply -auto-approve
+{% endraw %}

@@ -1,0 +1,30 @@
+{% raw %}name: Terraform Plan
+run-name: "terraform plan (手動実行)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Terraform をセットアップ
+        uses: hashicorp/setup-terraform@v3
+
+      - name: terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: terraform plan
+        working-directory: infra
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: terraform plan
+{% endraw %}

@@ -1,0 +1,18 @@
+# =============================================================================
+# 出力定義
+# =============================================================================
+
+output "pages_project_name" {
+  description = "Cloudflare Pages プロジェクト名"
+  value       = cloudflare_pages_project.this.name
+}
+
+output "pages_project_subdomain" {
+  description = "Cloudflare Pages のサブドメイン"
+  value       = cloudflare_pages_project.this.subdomain
+}
+
+output "pages_project_domains" {
+  description = "Cloudflare Pages のドメイン一覧"
+  value       = cloudflare_pages_project.this.domains
+}

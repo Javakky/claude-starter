@@ -1,0 +1,21 @@
+# =============================================================================
+# 変数定義
+# =============================================================================
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API トークン"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare アカウント ID"
+  type        = string
+  default     = "{{ cloudflare_account_id }}"
+}
+
+variable "project_name" {
+  description = "Cloudflare Pages プロジェクト名"
+  type        = string
+  default     = "{{ cloudflare_project_name }}"
+}
