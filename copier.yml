@@ -78,12 +78,14 @@ cloudflare_project_name:
   help: |
     Cloudflare Pages のプロジェクト名を入力してください。
   when: "{{ install_staging }}"
+  validator: "{% if not cloudflare_project_name %}プロジェクト名は必須です{% endif %}"
 
 cloudflare_account_id:
   type: str
   help: |
     Cloudflare のアカウント ID を入力してください。
   when: "{{ install_staging }}"
+  validator: "{% if not cloudflare_account_id %}アカウント ID は必須です{% endif %}"
 
 # =============================================================================
 # Claude モデル・ターン数設定
