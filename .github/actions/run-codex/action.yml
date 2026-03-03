@@ -71,6 +71,14 @@ inputs:
     description: "GitHub App の秘密鍵（PEM 形式）"
     required: false
     default: ""
+  review_mode:
+    description: "レビュー実行モード。true の場合は行コメント投稿を有効化"
+    required: false
+    default: "false"
+  review_pr_number:
+    description: "レビュー投稿対象の PR 番号（review_mode=true で使用）"
+    required: false
+    default: ""
 
 outputs:
   codex_response:
@@ -225,6 +233,7 @@ runs:
         ISSUE_NUMBER: ${{ inputs.issue_number }}
         ORIGINAL_PROMPT: ${{ inputs.prompt }}
         AUTO_COMMIT: ${{ inputs.auto_commit }}
+        REVIEW_MODE: ${{ inputs.review_mode }}
       run: |
         CONTEXT=""
 
@@ -272,6 +281,10 @@ runs:
 
         # 作業サマリー指示を追加
         FULL_PROMPT=$(printf '%s\n\n---\n【サマリー出力】\n作業完了後、結果のサマリーを `.codex-summary.md` に Markdown 形式で書き出してください。' "$FULL_PROMPT")
+
+        if [ "$REVIEW_MODE" = "true" ]; then
+          FULL_PROMPT=$(printf '%s\n\n---\n【レビュー出力】\nレビュー結果は `.codex-review-findings.json` に保存してください。形式は以下に従ってください。\n{\n  "summary": "全体サマリー",\n  "findings": [\n    {\n      "path": "ファイルパス",\n      "line": 123,\n      "severity": "low|medium|high|critical",\n      "title": "問題の要約",\n      "evidence": "根拠",\n      "suggestion": "修正案",\n      "impact": "影響範囲"\n    }\n  ]\n}\nlow は会話サマリー向け、medium 以上は行コメント対象です。' "$FULL_PROMPT")
+        fi
 
         EOF_MARKER="EOF_CONTEXT_$(date +%s%N)"
         echo "prompt<<${EOF_MARKER}" >> $GITHUB_OUTPUT
@@ -430,6 +443,144 @@ runs:
         echo "$RESPONSE" >> $GITHUB_OUTPUT
         echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
+    - name: Publish PR line review
+      if: inputs.review_mode == 'true' && inputs.review_pr_number != '' && (steps.app_token.outputs.token != '' || inputs.bot_github_token != '' || inputs.github_token != '')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token || inputs.bot_github_token || inputs.github_token }}
+        REVIEW_PR_NUMBER: ${{ inputs.review_pr_number }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f .codex-review-findings.json ]; then
+          echo "⚠️ `.codex-review-findings.json` が見つからないため、行コメント投稿をスキップします。" > .review-fallback.md
+          gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
+          exit 0
+        fi
+
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "python3 is required to publish structured PR line review"
+          exit 1
+        fi
+
+        PR_FILES_JSON=$(gh pr view "$REVIEW_PR_NUMBER" --json files 2>/dev/null || echo '{"files":[]}')
+        export PR_FILES_JSON
+
+        python3 <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        findings_path = Path(".codex-review-findings.json")
+        payload_path = Path(".review-payload.json")
+        fallback_path = Path(".review-fallback.md")
+        meta_path = Path(".review-meta.env")
+
+        try:
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            fallback_path.write_text(f"⚠️ Structured review parsing failed: {exc}\n", encoding="utf-8")
+            meta_path.write_text("COMMENTS_COUNT=0\nFALLBACK_COUNT=1\nREVIEW_EVENT=COMMENT\n", encoding="utf-8")
+            raise SystemExit(0)
+
+        summary = str(data.get("summary", "")).strip()
+        findings = data.get("findings", []) or []
+
+        changed = set()
+        try:
+            files_data = json.loads(os.environ.get("PR_FILES_JSON", "{}"))
+            for f in files_data.get("files", []):
+                path = f.get("path")
+                if path:
+                    changed.add(path)
+        except Exception:
+            pass
+
+        rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        comments = []
+        fallback = []
+        highest = 0
+
+        def body(item):
+            return "\n".join([
+                f"問題: {str(item.get('title', '')).strip()}",
+                f"根拠: {str(item.get('evidence', '')).strip()}",
+                f"修正案: {str(item.get('suggestion', '')).strip()}",
+                f"影響: {str(item.get('impact', '')).strip()}",
+            ])
+
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            severity = str(item.get("severity", "low")).lower()
+            if severity not in rank:
+                severity = "low"
+            highest = max(highest, rank[severity])
+
+            p = str(item.get("path", "")).strip()
+            line = item.get("line")
+            text = body(item)
+
+            if severity == "low":
+                fallback.append(f"- [low] `{p}:{line}` {item.get('title', '')}")
+                continue
+            if not p or p not in changed:
+                fallback.append(f"- [fallback:invalid_path] `{p}:{line}`\n{text}")
+                continue
+            if not isinstance(line, int) or line <= 0:
+                fallback.append(f"- [fallback:invalid_line] `{p}:{line}`\n{text}")
+                continue
+
+            comments.append({
+                "path": p,
+                "line": line,
+                "side": "RIGHT",
+                "body": text[:65000],
+            })
+
+        event = "REQUEST_CHANGES" if highest >= rank["high"] else "COMMENT"
+        payload = {
+            "event": event,
+            "body": summary or "AI review findings",
+            "comments": comments,
+        }
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        if fallback:
+            prefix = "⚠️ 一部の指摘は行コメント化できなかったため conversation にフォールバックしました。\n\n"
+            fallback_path.write_text(prefix + "\n".join(fallback), encoding="utf-8")
+        else:
+            fallback_path.write_text("", encoding="utf-8")
+
+        meta_path.write_text(
+            f"COMMENTS_COUNT={len(comments)}\nFALLBACK_COUNT={len(fallback)}\nREVIEW_EVENT={event}\n",
+            encoding="utf-8"
+        )
+        PY
+
+        # shellcheck disable=SC1091
+        source .review-meta.env
+
+        if [ "${COMMENTS_COUNT:-0}" -gt 0 ]; then
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$REVIEW_PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+            {
+              echo "⚠️ review API 投稿に失敗したため conversation にフォールバックしました。"
+              echo
+              echo "reason: api_error"
+              echo "detail: ${ERR_MSG}"
+              echo
+              cat .review-fallback.md 2>/dev/null || true
+            } > .review-fallback-all.md
+            gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback-all.md >/dev/null || true
+            exit 0
+          fi
+        fi
+
+        if [ "${FALLBACK_COUNT:-0}" -gt 0 ] && [ -s .review-fallback.md ]; then
+          gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
+        fi
+
     # 10. Codex 作業用ファイルのクリーンアップ
     - name: Cleanup Codex work files
       shell: bash
@@ -490,7 +641,7 @@ runs:
 
         # 一時ファイルを除外してステージング
         git add -A
-        git reset -- .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-issues.json 2>/dev/null || true
+        git reset -- .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-issues.json .codex-review-findings.json .review-meta.env .review-payload.json .review-fallback.md .review-fallback-all.md .review-post.err 2>/dev/null || true
 
         # コミット（Bot ユーザーの正しいメールで Co-authored-by を設定）
         COMMIT_FULL_MSG=$(printf '%s\n\nCo-authored-by%s %s <%s>' "$COMMIT_MSG" ":" "$BOT_LOGIN" "$GIT_EMAIL")
@@ -620,4 +771,4 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md
+        rm -f .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-review-findings.json .review-meta.env .review-payload.json .review-fallback.md .review-fallback-all.md .review-post.err

@@ -122,6 +122,14 @@ copier update
     *   🛠️ 修正指示: `@claude <修正内容>`
     *   🔄 再レビュー: `@claude [review]`
 
+#### 自動レビューのコメント投稿ポリシー
+
+- レビュー指摘は構造化ファイル（`.codex-review-findings.json`）として生成されます。
+- `medium` 以上の指摘は PR の差分行に line comment として投稿されます。
+- `low` はノイズ抑制のため line comment にせず、会話コメントへ集約されます。
+- `high` / `critical` が 1 件以上ある場合、レビューイベントは `REQUEST_CHANGES` になります。
+- `path` / `line` が差分に一致しない場合や API 投稿失敗時は、理由付きで PR conversation へフォールバックします。
+
 --- 
 
 ## 🔀 Codex 連携（オプション）
