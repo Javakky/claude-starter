@@ -172,7 +172,9 @@ runs:
         BOT_LOGIN: ${{ inputs.git_user_name }}
       run: |
         # BOT_LOGIN のサニタイズ（GitHub ユーザー名として有効な文字のみ許可）
-        if [[ ! "$BOT_LOGIN" =~ ^[a-zA-Z0-9\[\]._-]+$ ]]; then
+        # codex[bot] のような GitHub bot ユーザー名を許可
+        VALID_PATTERN='^[a-zA-Z0-9._-]+(\[[a-zA-Z0-9._-]+\])?$'
+        if [[ ! "$BOT_LOGIN" =~ $VALID_PATTERN ]]; then
           echo "::error::git_user_name に無効な文字が含まれています: ${BOT_LOGIN}"
           exit 1
         fi
