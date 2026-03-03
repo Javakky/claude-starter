@@ -55,10 +55,6 @@ inputs:
     description: "デフォルトの Codex モデル（コメント本文で指定がない場合に使用）"
     required: false
     default: "gpt-5.3-codex"
-  reasoning_effort:
-    description: "推論レベル（minimal, low, medium, high, xhigh）。空の場合はデフォルト。参考: https://developers.openai.com/codex/config-reference"
-    required: false
-    default: ""
   git_user_name:
     description: "Git コミットの作成者名（GitHub App の bot ユーザー名。例: codex[bot]）"
     required: false
@@ -107,19 +103,17 @@ runs:
         app-id: ${{ inputs.app_id }}
         private-key: ${{ inputs.app_private_key }}
 
-    # 1.5. Codex オプション解決（モデル・推論レベルをコメント本文から自動パース）
+    # 1.5. Codex オプション解決（モデルをコメント本文から自動パース）
     - name: Resolve Codex options
       id: codex_opts
       uses: actions/github-script@v7
       env:
         COMMENT_BODY: ${{ inputs.comment_body }}
         DEFAULT_MODEL: ${{ inputs.default_model }}
-        EXPLICIT_REASONING: ${{ inputs.reasoning_effort }}
       with:
         script: |
           const body = process.env.COMMENT_BODY || "";
           const defaultModel = process.env.DEFAULT_MODEL || "gpt-5.3-codex";
-          const explicitReasoning = process.env.EXPLICIT_REASONING || "";
 
           // 優先順位: コメント本文 > デフォルトモデル
           let model = "";
@@ -153,14 +147,7 @@ runs:
             model = defaultModel;
           }
 
-          let reasoningEffort = explicitReasoning;
-          if (!reasoningEffort && body) {
-            const thinkingMatch = body.match(/\[(?:thinking|reasoning)=(minimal|low|medium|high|xhigh)\]/i);
-            reasoningEffort = thinkingMatch ? thinkingMatch[1].toLowerCase() : "";
-          }
-
           core.setOutput("model", model);
-          core.setOutput("reasoning_effort", reasoningEffort);
 
     # 2. Git ユーザー設定
     # GitHub でボットのアバターを正しく表示するには <id>+<login>@users.noreply.github.com 形式が必要
@@ -251,7 +238,6 @@ runs:
           s/\[@?(claude|codex)\]//g;
           s/\[model=[^]]+\]//g;
           s/\[(turns|max-turns)=[0-9]+\]//g;
-          s/\[(thinking|reasoning)=(minimal|low|medium|high|xhigh)\]//gi;
         ')
 
         # コンテキスト付きプロンプトを構築
@@ -352,49 +338,35 @@ runs:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
         CODEX_PROMPT: ${{ steps.context.outputs.prompt }}
         CODEX_MODEL: ${{ steps.codex_opts.outputs.model }}
-        CODEX_REASONING: ${{ steps.codex_opts.outputs.reasoning_effort }}
       run: |
         # codex exec: CI/スクリプト向け非対話モード
-        # https://developers.openai.com/codex/cli/reference
-        CODEX_ARGS=(exec --color never)
+        # 参考: https://developers.openai.com/codex/cli/reference/
+        #       https://developers.openai.com/codex/noninteractive/
+        CODEX_ARGS=(exec --color never --ephemeral)
 
-        # CI では承認待ちで止まらない設定
-        # --full-auto は --ask-for-approval on-request のショートカットで、
-        # 状況によって承認待ちになるため、CI では never を明示指定する
-        CODEX_ARGS+=(--ask-for-approval never --sandbox workspace-write)
+        # CI では承認待ちで止まらないように --yolo を使用
+        # --yolo は --dangerously-bypass-approvals-and-sandbox のショートカット
+        # 隔離された CI 環境でのみ使用すること
+        CODEX_ARGS+=(--yolo)
 
+        # モデル指定
         if [ -n "$CODEX_MODEL" ]; then
           CODEX_ARGS+=(--model "$CODEX_MODEL")
         fi
 
-        # 推論レベルは config キーで指定（公式: model_reasoning_effort）
-        # https://developers.openai.com/codex/config-reference
-        if [ -n "$CODEX_REASONING" ]; then
-          CODEX_ARGS+=(-c "model_reasoning_effort=$CODEX_REASONING")
-        fi
-
         # 最終メッセージをファイルに出力（フォールバック用）
-        # .codex-summary.md はプロンプト指示でモデルが書くサマリー用
-        # .codex-last-message.md は CLI が書く最終メッセージ用（競合回避）
         CODEX_ARGS+=(--output-last-message .codex-last-message.md)
 
         echo "::group::Codex 実行"
         echo "モデル: ${CODEX_MODEL:-default}"
-        echo "推論レベル: ${CODEX_REASONING:-default}"
+        echo "コマンド: codex ${CODEX_ARGS[*]} <prompt>"
         echo "::endgroup::"
 
-        # プロンプトを stdin 経由で渡す（ARG_MAX ~2MB の制限を回避）
-        # codex exec は PROMPT に '-' を渡すと stdin から読める
-        PROMPT_FILE=$(mktemp)
-        printf '%s' "$CODEX_PROMPT" > "$PROMPT_FILE"
-
-        # Codex 実行（exec サブコマンド、stdin 入力）
+        # Codex 実行（exec サブコマンド、プロンプトを引数で渡す）
         set +e
-        codex "${CODEX_ARGS[@]}" - < "$PROMPT_FILE" 2>&1 | tee .codex-output.log
+        codex "${CODEX_ARGS[@]}" "$CODEX_PROMPT" 2>&1 | tee .codex-output.log
         CODEX_EXIT_CODE=${PIPESTATUS[0]}
         set -e
-
-        rm -f "$PROMPT_FILE"
 
         echo "exit_code=${CODEX_EXIT_CODE}" >> $GITHUB_OUTPUT
 

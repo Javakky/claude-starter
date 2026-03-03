@@ -143,7 +143,6 @@ copier update
 | :--- | :--- | :--- |
 | `[model=NAME]` | Codex で使用するモデルを指定 | `@codex [model=gpt-5.2-codex]` |
 | `[o4-mini]` / `[gpt-5.3-codex]` 等 | モデル名のショートカット | `@codex [gpt-5.3-codex] 実装して` |
-| `[thinking=LEVEL]` | 推論レベルを指定（`minimal` / `low` / `medium` / `high` / `xhigh`） | `@codex [thinking=high]` |
 
 ## 💬 コマンドオプション
 
