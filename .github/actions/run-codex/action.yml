@@ -336,6 +336,7 @@ runs:
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.codex_code_oauth_token }}
+        GH_TOKEN: ${{ steps.app_token.outputs.token || inputs.bot_github_token || inputs.github_token }}
         CODEX_PROMPT: ${{ steps.context.outputs.prompt }}
         CODEX_MODEL: ${{ steps.codex_opts.outputs.model }}
       run: |
