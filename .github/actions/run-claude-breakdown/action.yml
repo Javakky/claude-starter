@@ -182,7 +182,7 @@ ${CODEX_SUFFIX}"
     - name: Run Codex
       if: inputs.mention_type == 'codex'
       id: codex_run
-      uses: ./.github/actions/run-codex
+      uses: Javakky/claude-starter/.github/actions/run-codex@master
       with:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
