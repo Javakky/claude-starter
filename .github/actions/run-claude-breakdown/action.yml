@@ -152,27 +152,16 @@ runs:
         # Codex 用のプロンプトに Issue 作成の補助指示を追加
         # Codex の --full-auto サンドボックスではネットワークがブロックされるため、
         # gh CLI は使用できない。JSON ファイル出力でワークフロー側が Issue を作成する
-        read -r -d '' CODEX_SUFFIX << 'PROMPT_END' || true
----
-【重要: Issue 作成について】
-Codex のサンドボックス環境では `gh` コマンドは使用できません。
-代わりに、以下の JSON 形式で `.codex-issues.json` ファイルに書き出してください。
-ワークフローが自動的にこの JSON を読み取り、Issue を作成します。
-
-```json
-[
-  {
-    "title": "Issue タイトル",
-    "body": "Issue 本文（Markdown）",
-    "milestone": "MILESTONE_PLACEHOLDER"
-  }
-]
-```
-PROMPT_END
-        CODEX_SUFFIX="${CODEX_SUFFIX//MILESTONE_PLACEHOLDER/${MILESTONE_TITLE}}"
-        CODEX_PROMPT="${ORIGINAL_PROMPT}
-
-${CODEX_SUFFIX}"
+        CODEX_SUFFIX=$(printf '%s\n%s\n%s\n%s\n%s\n\n%s\n%s\n%s' \
+          "---" \
+          "【重要： Issue 作成について】" \
+          "Codex のサンドボックス環境では \`gh\` コマンドは使用できません。" \
+          "代わりに、以下の JSON 形式で \`.codex-issues.json\` ファイルに書き出してください。" \
+          "ワークフローが自動的にこの JSON を読み取り、Issue を作成します。" \
+          "\`\`\`json" \
+          "[{\"title\": \"Issue タイトル\", \"body\": \"Issue 本文（Markdown）\", \"milestone\": \"${MILESTONE_TITLE}\"}]" \
+          "\`\`\`")
+        CODEX_PROMPT=$(printf '%s\n\n%s' "$ORIGINAL_PROMPT" "$CODEX_SUFFIX")
 
         EOF_MARKER="EOF_CODEX_BREAKDOWN_$(date +%s%N)"
         echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
@@ -232,10 +221,7 @@ ${CODEX_SUFFIX}"
 
         # 作成結果を元 Issue にコメント
         if [ -n "$CREATED_ISSUES" ]; then
-          COMMENT_BODY="## タスク分解が完了しました（Codex）
-
-以下の Issue を作成し、Milestone 「${MILESTONE_TITLE}」に追加しました:
-$(echo -e "$CREATED_ISSUES")"
+          COMMENT_BODY=$(printf '## タスク分解が完了しました（Codex）\n\n以下の Issue を作成し、Milestone 「%s」に追加しました%s\n%b' "$MILESTONE_TITLE" ":" "$CREATED_ISSUES")
 
           COMMENT_BODY_FILE=$(mktemp)
           echo "$COMMENT_BODY" > "$COMMENT_BODY_FILE"
