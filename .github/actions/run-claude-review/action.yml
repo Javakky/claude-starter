@@ -118,6 +118,8 @@ runs:
       uses: actions/github-script@v7
       env:
         COMMENT_BODY: ${{ inputs.comment_body }}
+        MODEL: ${{ inputs.model }}
+        MAX_TURNS: ${{ inputs.max_turns }}
       with:
         script: |
           const body = process.env.COMMENT_BODY || "";
@@ -125,10 +127,10 @@ runs:
           const model =
             body.includes("[sonnet]") ? "sonnet" :
             body.includes("[opus]")   ? "opus"   :
-            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.model }}";
+            body.includes("[haiku]")  ? "haiku"  : process.env.MODEL || "opus";
 
           const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.max_turns }}");
+          const maxTurns = m ? Number(m[1]) : Number(process.env.MAX_TURNS || "30");
 
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
