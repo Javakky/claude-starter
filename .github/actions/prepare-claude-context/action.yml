@@ -138,7 +138,7 @@ runs:
 
           /**
            * reason 出力のサニタイズ（多層防御）
-           * 下流の workflow で ${{ }} 式として run: ブロック内の
+           * 下流の workflow で GitHub Actions 式として run: ブロック内の
            * echo "..." に展開された場合のシェルインジェクションを防止する。
            * 日本語などの Unicode 文字はそのまま保持し、制御文字と
            * シェルメタ文字のみ除去する。
@@ -417,12 +417,8 @@ runs:
 
               const headSha = pr.head?.sha || '';
               const headRef = pr.head?.ref || '';
-              const fullName = pr.head?.repo?.full_name || '';
-              const isFork = fullName !== `${context.repo.owner}/${context.repo.repo}`;
-              // fork や branch が既に削除された PR に実装は追加しない
-              if (isFork) {
-                return skip('fork-pr-skip', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, head_sha: headSha, head_ref: headRef, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
-              }
+              // fork PR へのコメントトリガーは許可（コメント者の権限チェックは既に通過済み）
+              // branch が既に削除された PR に実装は追加しない
               if (!headRef) {
                 return skip('no-head-ref', { issue_number: issueNumber, issue_url: issueUrl, pr_number: prNumber, comment_body: commentBody, trigger_kind: triggerKind, mention_type: mentionType });
               }
