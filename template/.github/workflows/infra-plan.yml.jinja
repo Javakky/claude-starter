@@ -39,8 +39,11 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          terraform plan -no-color | tee plan_output.txt
+          set +e
+          terraform plan -no-color 2>&1 | tee plan_output.txt
+          PLAN_EXIT=$?
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat plan_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $PLAN_EXIT
 {% endraw %}

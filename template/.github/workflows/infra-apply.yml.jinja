@@ -12,9 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  apply:
+  plan:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
@@ -32,10 +31,41 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          terraform plan -out=tfplan -no-color | tee plan_output.txt
+          set +e
+          terraform plan -out=tfplan -no-color 2>&1 | tee plan_output.txt
+          PLAN_EXIT=$?
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat plan_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $PLAN_EXIT
+
+      - name: plan ファイルをアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: infra/tfplan
+          retention-days: 1
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Terraform をセットアップ
+        uses: hashicorp/setup-terraform@v3
+
+      - name: terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: plan ファイルをダウンロード
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra
 
       - name: terraform apply
         working-directory: infra

@@ -94,6 +94,20 @@ production_branch:
   default: "main"
   when: "{{ install_staging }}"
 
+terraform_backend:
+  type: str
+  help: |
+    Terraform の backend タイプを選択してください。
+    cloud: Terraform Cloud（推奨）
+    s3: S3 互換ストレージ（Cloudflare R2 等）
+    none: backend 未設定（ローカルのみ・非推奨）
+  default: "cloud"
+  choices:
+    - "cloud"
+    - "s3"
+    - "none"
+  when: "{{ install_staging }}"
+
 # =============================================================================
 # Claude モデル・ターン数設定
 # =============================================================================
