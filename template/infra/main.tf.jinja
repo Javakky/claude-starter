@@ -31,8 +31,8 @@ terraform {
 
     # R2 の場合は以下も設定してください:
     # endpoint                    = "https://<account_id>.r2.cloudflarestorage.com"
-    # access_key                  = var.r2_access_key_id
-    # secret_key                  = var.r2_secret_access_key
+    # access_key                  = "（環境変数 AWS_ACCESS_KEY_ID または -backend-config で設定）"
+    # secret_key                  = "（環境変数 AWS_SECRET_ACCESS_KEY または -backend-config で設定）"
     # skip_credentials_validation = true
     # skip_metadata_api_check     = true
     # skip_region_validation      = true
