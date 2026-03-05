@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: terraform
+  cancel-in-progress: true
+
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -21,10 +25,22 @@ jobs:
         working-directory: infra
         run: terraform init
 
+      - name: terraform fmt check
+        working-directory: infra
+        run: terraform fmt -check
+
+      - name: terraform validate
+        working-directory: infra
+        run: terraform validate
+
       - name: terraform plan
         working-directory: infra
         env:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: terraform plan
+        run: |
+          terraform plan -no-color | tee plan_output.txt
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat plan_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 {% endraw %}

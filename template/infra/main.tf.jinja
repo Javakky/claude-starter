@@ -12,13 +12,23 @@ terraform {
     }
   }
 
-  # Terraform Cloud（無料枠）を推奨
-  # 有効にする場合は以下のコメントを外してください
+  # ⚠️ リモート backend の設定が必須です
+  # GitHub Actions では state がローカルに保存されるため、
+  # リモート backend を設定しないと state が失われます。
+  #
+  # Terraform Cloud（無料枠）を使用する場合:
   # cloud {
   #   organization = "your-organization"
   #   workspaces {
   #     name = "your-workspace"
   #   }
+  # }
+  #
+  # S3 互換ストレージ（Cloudflare R2 等）を使用する場合:
+  # backend "s3" {
+  #   bucket = "terraform-state"
+  #   key    = "terraform.tfstate"
+  #   # R2 の場合は endpoint, access_key, secret_key を設定
   # }
 }
 
@@ -32,5 +42,5 @@ provider "cloudflare" {
 resource "cloudflare_pages_project" "this" {
   account_id        = var.cloudflare_account_id
   name              = var.project_name
-  production_branch = "main"
+  production_branch = var.production_branch
 }

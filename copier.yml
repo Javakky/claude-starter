@@ -87,6 +87,13 @@ cloudflare_account_id:
   when: "{{ install_staging }}"
   validator: "{% if not cloudflare_account_id %}アカウント ID は必須です{% endif %}"
 
+production_branch:
+  type: str
+  help: |
+    本番環境のブランチ名を入力してください。
+  default: "main"
+  when: "{{ install_staging }}"
+
 # =============================================================================
 # Claude モデル・ターン数設定
 # =============================================================================

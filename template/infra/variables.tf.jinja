@@ -19,3 +19,9 @@ variable "project_name" {
   type        = string
   default     = "{{ cloudflare_project_name }}"
 }
+
+variable "production_branch" {
+  description = "本番環境のブランチ名"
+  type        = string
+  default     = "{{ production_branch }}"
+}
