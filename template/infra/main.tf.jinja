@@ -16,9 +16,9 @@ terraform {
   # Terraform Cloud backend
   # organization と workspaces を環境に合わせて設定してください
   cloud {
-    organization = "your-organization"
+    organization = "{{ terraform_cloud_organization }}"
     workspaces {
-      name = "your-workspace"
+      name = "{{ terraform_cloud_workspace }}"
     }
   }
 {% elif terraform_backend == "s3" %}
@@ -27,7 +27,17 @@ terraform {
   backend "s3" {
     bucket = "terraform-state"
     key    = "terraform.tfstate"
-    # R2 の場合は endpoint, access_key, secret_key を設定
+    region = "auto"
+
+    # R2 の場合は以下も設定してください:
+    # endpoint                    = "https://<account_id>.r2.cloudflarestorage.com"
+    # access_key                  = var.r2_access_key_id
+    # secret_key                  = var.r2_secret_access_key
+    # skip_credentials_validation = true
+    # skip_metadata_api_check     = true
+    # skip_region_validation      = true
+    # skip_requesting_account_id  = true
+    # skip_s3_checksum            = true
   }
 {% else %}
   # ⚠️ backend 未設定: state はローカルにのみ保存されます

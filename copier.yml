@@ -108,6 +108,20 @@ terraform_backend:
     - "none"
   when: "{{ install_staging }}"
 
+terraform_cloud_organization:
+  type: str
+  help: |
+    Terraform Cloud の organization 名を入力してください。
+  when: "{{ install_staging and terraform_backend == 'cloud' }}"
+  validator: "{% if not terraform_cloud_organization %}organization 名は必須です{% endif %}"
+
+terraform_cloud_workspace:
+  type: str
+  help: |
+    Terraform Cloud の workspace 名を入力してください。
+  when: "{{ install_staging and terraform_backend == 'cloud' }}"
+  validator: "{% if not terraform_cloud_workspace %}workspace 名は必須です{% endif %}"
+
 # =============================================================================
 # Claude モデル・ターン数設定
 # =============================================================================
