@@ -148,9 +148,6 @@ runs:
                 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
                 // GPT-5.x 汎用モデル
                 'gpt-5.4', 'gpt-5.2',
-                // o-series / GPT-4.x
-                'o4-mini', 'o3', 'o3-mini', 'o1',
-                'gpt-4.1', 'gpt-4o', 'gpt-4o-mini',
               ];
               for (const m of knownModels) {
                 if (body.includes(`[${m}]`)) {
