@@ -144,10 +144,10 @@ runs:
             if (!model) {
               const knownModels = [
                 // GPT-5.x Codex 最適化モデル
-                'gpt-5.2-codex', 'gpt-5.3-codex', 'gpt-5.1-codex', 'gpt-5.1-codex-max',
-                'gpt-5.1-codex-mini', 'gpt-5-codex',
+                'gpt-5.4-codex', 'gpt-5.3-codex', 'gpt-5.2-codex',
+                'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5-codex',
                 // GPT-5.x 汎用モデル
-                'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+                'gpt-5.4pro', 'gpt-5.4', 'gpt-5.3', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
                 // o-series / GPT-4.x
                 'o4-mini', 'o3', 'o3-mini', 'o1', 'o1-mini', 'o1-pro',
                 'gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini',
