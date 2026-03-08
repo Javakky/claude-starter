@@ -1,0 +1,42 @@
+{% raw %}name: Terraform Plan
+run-name: "terraform plan (手動実行)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-plan
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Terraform セットアップ・検証
+        uses: ./.github/actions/setup-terraform
+{% endraw %}{% if terraform_backend == "cloud" %}{% raw %}        with:
+          tf_api_token: ${{ secrets.TF_API_TOKEN }}
+{% endraw %}{% elif terraform_backend == "s3" %}{% raw %}        with:
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+{% endraw %}{% endif %}{% raw %}
+      - name: terraform plan
+        working-directory: infra
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set +e
+          terraform plan -input=false -no-color 2>&1 | tee plan_output.txt
+          PLAN_EXIT=$?
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat plan_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $PLAN_EXIT
+{% endraw %}

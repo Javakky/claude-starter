@@ -1,0 +1,25 @@
+# =============================================================================
+# 出力定義
+#
+# terraform apply 完了後に表示される値です。
+# terraform output コマンドでいつでも確認できます。
+# 他の Terraform モジュールから参照することもできます。
+# =============================================================================
+
+# Pages プロジェクト名
+output "pages_project_name" {
+  description = "Cloudflare Pages プロジェクト名"
+  value       = cloudflare_pages_project.this.name
+}
+
+# Pages のデフォルトサブドメイン（例: my-project.pages.dev）
+output "pages_project_subdomain" {
+  description = "Cloudflare Pages のサブドメイン"
+  value       = cloudflare_pages_project.this.subdomain
+}
+
+# Pages に設定されたドメイン一覧（カスタムドメイン含む）
+output "pages_project_domains" {
+  description = "Cloudflare Pages のドメイン一覧"
+  value       = cloudflare_pages_project.this.domains
+}
