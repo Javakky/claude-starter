@@ -1,0 +1,371 @@
+# Terraform × Cloudflare Pages セットアップガイド
+
+このガイドでは、Terraform を使って Cloudflare Pages プロジェクトを管理する方法を、初心者向けに解説します。
+
+## 目次
+
+1. [前提知識](#前提知識)
+2. [事前準備](#事前準備)
+3. [Terraform の基本概念](#terraform-の基本概念)
+4. [ファイル構成](#ファイル構成)
+5. [初期セットアップ手順](#初期セットアップ手順)
+6. [GitHub Actions ワークフロー](#github-actions-ワークフロー)
+7. [日常の運用フロー](#日常の運用フロー)
+8. [トラブルシューティング](#トラブルシューティング)
+
+---
+
+## 前提知識
+
+### Terraform とは
+
+Terraform は、インフラストラクチャをコードで管理するツール（Infrastructure as Code: IaC）です。
+GUI で手動設定する代わりに、設定ファイル（`.tf`）にインフラの定義を書き、コマンドで適用します。
+
+**メリット:**
+- インフラの変更履歴を Git で追跡できる
+- 環境の再現性が高い（同じコードで同じ環境を構築できる）
+- レビュープロセスを通じて変更を管理できる
+
+### Cloudflare Pages とは
+
+Cloudflare Pages は、静的サイトや JAMstack アプリケーションをホスティングするサービスです。
+GitHub リポジトリと連携し、コードの変更を自動でデプロイできます。
+
+---
+
+## 事前準備
+
+### 1. Terraform のインストール
+
+```bash
+# macOS（Homebrew）
+brew install terraform
+
+# バージョン確認
+terraform version
+```
+
+その他の OS は [公式インストールガイド](https://developer.hashicorp.com/terraform/install) を参照してください。
+
+### 2. Cloudflare アカウントの準備
+
+以下の情報を Cloudflare ダッシュボードから取得してください:
+
+| 項目 | 取得方法 |
+|---|---|
+| **アカウント ID** | ダッシュボード右側のサイドバーに表示 |
+| **API トークン** | 「マイプロフィール」→「API トークン」→「トークンを作成」 |
+
+#### API トークンの作成手順
+
+1. Cloudflare ダッシュボードで「マイプロフィール」→「API トークン」を開く
+2. 「トークンを作成」をクリック
+3. 「カスタムトークンを作成」を選択
+4. 以下の権限を設定:
+   - **アカウント** → **Cloudflare Pages** → **編集**
+5. トークンを作成し、安全な場所に保存する
+
+> ⚠️ API トークンは一度しか表示されません。必ずコピーして安全に保管してください。
+
+### 3. Backend の選択
+
+Terraform は「state（状態）」ファイルでインフラの現在の状態を管理します。
+このファイルの保存先（backend）を選ぶ必要があります。
+
+| Backend | 特徴 | 推奨度 |
+|---|---|---|
+| **Terraform Cloud** | 無料枠あり。state 管理・ロック・UI を提供 | ⭐ 推奨 |
+| **S3 互換（R2 等）** | Cloudflare R2 や AWS S3 に state を保存 | ○ 中級者向け |
+| **なし（ローカル）** | state がローカルにのみ保存される | × CI では使用不可 |
+
+---
+
+## Terraform の基本概念
+
+### よく使うコマンド
+
+```bash
+# 初期化（プロバイダーのダウンロード等）
+terraform init
+
+# コードのフォーマットチェック
+terraform fmt -check
+
+# 設定の構文検証
+terraform validate
+
+# 変更のプレビュー（実際には適用しない）
+terraform plan
+
+# 変更の適用
+terraform apply
+
+# 現在の state を確認
+terraform show
+```
+
+### 実行フロー
+
+```
+terraform init → terraform plan → (確認) → terraform apply
+     ↓                 ↓                          ↓
+ プロバイダー      変更内容を         確認後に実際に
+ をダウンロード    プレビュー         インフラを変更
+```
+
+---
+
+## ファイル構成
+
+```
+infra/
+├── main.tf        # メインの Terraform 設定（プロバイダー・リソース定義）
+├── variables.tf   # 変数の定義（入力パラメータ）
+└── outputs.tf     # 出力の定義（適用後に表示される情報）
+```
+
+### main.tf
+
+Terraform の設定、プロバイダー（Cloudflare）、リソース（Pages プロジェクト）を定義します。
+
+```hcl
+# Terraform の基本設定
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 4.0"
+    }
+  }
+
+  # Backend 設定（copier の選択に応じて自動生成）
+}
+
+# Cloudflare プロバイダーの認証設定
+provider "cloudflare" {
+  api_token = var.cloudflare_api_token
+}
+
+# Cloudflare Pages プロジェクト
+resource "cloudflare_pages_project" "this" {
+  account_id        = var.cloudflare_account_id
+  name              = var.project_name
+  production_branch = var.production_branch
+}
+```
+
+### variables.tf
+
+外部から注入する変数を定義します。`sensitive = true` を付けた変数はログに表示されません。
+
+```hcl
+variable "cloudflare_api_token" {
+  description = "Cloudflare API トークン"
+  type        = string
+  sensitive   = true  # ログに表示しない
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare アカウント ID"
+  type        = string
+}
+```
+
+### outputs.tf
+
+`terraform apply` 後に表示される情報を定義します。
+
+```hcl
+output "pages_project_subdomain" {
+  description = "Cloudflare Pages のサブドメイン"
+  value       = cloudflare_pages_project.this.subdomain
+}
+```
+
+---
+
+## 初期セットアップ手順
+
+### 手順 1: GitHub リポジトリに Secrets を登録
+
+GitHub リポジトリの「Settings」→「Secrets and variables」→「Actions」で以下を登録:
+
+| Secret 名 | 値 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare の API トークン |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID |
+
+### 手順 2: GitHub Environment を作成
+
+`infra-apply` ワークフローは `environment: production` の承認ゲートを使用します。
+
+1. リポジトリの「Settings」→「Environments」を開く
+2. 「New environment」で `production` を作成
+3. 「Required reviewers」にチェックを入れ、承認者を追加
+
+### 手順 3: Backend を設定
+
+#### Terraform Cloud を使う場合
+
+1. [Terraform Cloud](https://app.terraform.io/) でアカウントを作成
+2. Organization と Workspace を作成
+3. copier の質問で `terraform_backend: cloud` を選択し、organization 名と workspace 名を入力
+4. Terraform Cloud の Workspace 設定で環境変数を登録:
+   - `TF_VAR_cloudflare_api_token`（Sensitive にチェック）
+   - `TF_VAR_cloudflare_account_id`
+
+#### S3 互換ストレージ（R2）を使う場合
+
+1. Cloudflare ダッシュボードで R2 バケットを作成（例: `terraform-state`）
+2. R2 API トークンを作成
+3. copier の質問で `terraform_backend: s3` を選択
+4. `infra/main.tf` の backend ブロックで `endpoint` 等を設定
+5. CI 環境では以下の環境変数または `-backend-config` で認証情報を渡す:
+   - `AWS_ACCESS_KEY_ID`: R2 アクセスキー ID
+   - `AWS_SECRET_ACCESS_KEY`: R2 シークレットアクセスキー
+
+### 手順 4: ローカルで動作確認
+
+```bash
+cd infra
+
+# 環境変数を設定
+export TF_VAR_cloudflare_api_token="your-api-token"
+export TF_VAR_cloudflare_account_id="your-account-id"
+
+# 初期化
+terraform init
+
+# フォーマットチェック
+terraform fmt -check
+
+# 構文検証
+terraform validate
+
+# プレビュー（まだ適用しない）
+terraform plan
+```
+
+---
+
+## GitHub Actions ワークフロー
+
+### infra-plan（プレビュー）
+
+手動実行（`workflow_dispatch`）で Terraform plan を実行します。
+実際のインフラ変更は行わず、変更内容のプレビューのみ表示します。
+
+**実行方法:**
+1. GitHub の「Actions」タブを開く
+2. 「Terraform Plan」ワークフローを選択
+3. 「Run workflow」をクリック
+
+plan の結果は GitHub Actions の Step Summary に表示されます。
+
+### infra-apply（適用）
+
+手動実行で plan → 承認 → apply の流れでインフラ変更を適用します。
+
+**実行フロー:**
+1. `plan` ジョブ: 変更内容をプレビューし、plan ファイルを生成
+2. **承認ゲート**: `production` environment の承認者がレビュー・承認
+3. `apply` ジョブ: 承認された plan を適用
+
+```
+plan ジョブ → [承認待ち] → apply ジョブ
+  ↓              ↓             ↓
+変更内容を     承認者が      承認された
+プレビュー     内容を確認    変更を適用
+```
+
+### 共通 composite action
+
+`setup-terraform` アクションは、両ワークフローで共通の以下の処理をまとめています:
+
+- Terraform のインストール（`hashicorp/setup-terraform@v3`）
+- `terraform init`（初期化）
+- `terraform fmt -check`（フォーマットチェック）
+- `terraform validate`（構文検証）
+
+---
+
+## 日常の運用フロー
+
+### インフラ変更の流れ
+
+1. `infra/` 配下の `.tf` ファイルを編集
+2. ローカルで `terraform plan` を実行して変更内容を確認
+3. PR を作成してレビューを受ける
+4. マージ後、GitHub Actions で `infra-plan` を実行して確認
+5. `infra-apply` を実行して本番に適用
+
+### よくある変更例
+
+#### カスタムドメインを追加する
+
+```hcl
+# main.tf に追加
+resource "cloudflare_pages_domain" "custom" {
+  account_id   = var.cloudflare_account_id
+  project_name = cloudflare_pages_project.this.name
+  domain       = "example.com"
+}
+```
+
+#### ビルド設定を追加する
+
+```hcl
+# main.tf の cloudflare_pages_project に追加
+resource "cloudflare_pages_project" "this" {
+  account_id        = var.cloudflare_account_id
+  name              = var.project_name
+  production_branch = var.production_branch
+
+  build_config {
+    build_command   = "npm run build"
+    destination_dir = "dist"
+  }
+}
+```
+
+---
+
+## トラブルシューティング
+
+### `terraform init` が失敗する
+
+**原因:** Backend の設定が正しくない、またはネットワークエラー。
+
+```bash
+# 詳細なログを出力
+TF_LOG=DEBUG terraform init
+```
+
+### `terraform plan` で認証エラーが出る
+
+**原因:** API トークンが無効、または権限不足。
+
+- Cloudflare ダッシュボードでトークンの有効期限を確認
+- トークンに「Cloudflare Pages - 編集」権限があることを確認
+- 環境変数 `TF_VAR_cloudflare_api_token` が正しく設定されていることを確認
+
+### state のロックエラー
+
+**原因:** 別のプロセスが state を使用中。
+
+```bash
+# ロック状態を確認（Terraform Cloud の場合は UI で確認）
+terraform force-unlock <LOCK_ID>
+```
+
+> ⚠️ `force-unlock` は他のプロセスが実行中でないことを確認してから使用してください。
+
+### CI で state が毎回初期状態になる
+
+**原因:** Backend が `none`（ローカル）に設定されている。
+
+CI 環境ではジョブごとにファイルシステムがリセットされるため、backend を `cloud` または `s3` に変更してください。
+`copier.yml` の `terraform_backend` を変更し、`copier update` を実行します。

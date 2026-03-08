@@ -18,12 +18,8 @@ jobs:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
 
-      - name: Terraform をセットアップ
-        uses: hashicorp/setup-terraform@v3
-
-      - name: terraform init
-        working-directory: infra
-        run: terraform init
+      - name: Terraform セットアップ・検証
+        uses: ./.github/actions/setup-terraform
 
       - name: terraform plan
         working-directory: infra
@@ -55,12 +51,8 @@ jobs:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
 
-      - name: Terraform をセットアップ
-        uses: hashicorp/setup-terraform@v3
-
-      - name: terraform init
-        working-directory: infra
-        run: terraform init
+      - name: Terraform セットアップ・検証
+        uses: ./.github/actions/setup-terraform
 
       - name: plan ファイルをダウンロード
         uses: actions/download-artifact@v4

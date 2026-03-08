@@ -1,0 +1,23 @@
+name: "Terraform セットアップ"
+description: "Terraform のインストール・初期化・検証を行う共通アクション"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Terraform をセットアップ
+      uses: hashicorp/setup-terraform@v3
+
+    - name: terraform init
+      working-directory: infra
+      shell: bash
+      run: terraform init
+
+    - name: terraform fmt check
+      working-directory: infra
+      shell: bash
+      run: terraform fmt -check
+
+    - name: terraform validate
+      working-directory: infra
+      shell: bash
+      run: terraform validate
