@@ -1,6 +1,20 @@
 name: "Terraform セットアップ"
 description: "Terraform のインストール・初期化・検証を行う共通アクション"
 
+inputs:
+  tf_api_token:
+    description: "Terraform Cloud API トークン（Cloud backend の場合のみ）"
+    required: false
+    default: ""
+  aws_access_key_id:
+    description: "S3 backend 用アクセスキー ID（S3 backend の場合のみ）"
+    required: false
+    default: ""
+  aws_secret_access_key:
+    description: "S3 backend 用シークレットアクセスキー（S3 backend の場合のみ）"
+    required: false
+    default: ""
+
 runs:
   using: "composite"
   steps:
@@ -10,7 +24,11 @@ runs:
     - name: terraform init
       working-directory: infra
       shell: bash
-      run: terraform init
+      env:
+        TF_TOKEN_app_terraform_io: ${{ inputs.tf_api_token }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws_access_key_id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws_secret_access_key }}
+      run: terraform init -input=false
 
     - name: terraform fmt check
       working-directory: infra

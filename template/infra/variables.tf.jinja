@@ -1,25 +1,42 @@
 # =============================================================================
 # 変数定義
+#
+# Terraform の変数は以下の方法で値を設定できます（優先度順）:
+#   1. コマンドライン引数: terraform plan -var="project_name=my-app"
+#   2. 環境変数: export TF_VAR_project_name="my-app"
+#   3. terraform.tfvars ファイル（.gitignore に追加推奨）
+#   4. default 値（この設定ファイルで定義）
+#
+# sensitive = true を付けた変数は terraform plan/apply の出力に表示されません。
 # =============================================================================
 
+# Cloudflare API トークン
+# Cloudflare ダッシュボード > マイプロフィール > API トークン から作成
+# 必要な権限: アカウント > Cloudflare Pages > 編集
 variable "cloudflare_api_token" {
   description = "Cloudflare API トークン"
   type        = string
   sensitive   = true
 }
 
+# Cloudflare アカウント ID
+# Cloudflare ダッシュボード右側のサイドバーに表示されます
 variable "cloudflare_account_id" {
   description = "Cloudflare アカウント ID"
   type        = string
   default     = "{{ cloudflare_account_id }}"
 }
 
+# Cloudflare Pages プロジェクト名
+# <project_name>.pages.dev というサブドメインが自動的に割り当てられます
 variable "project_name" {
   description = "Cloudflare Pages プロジェクト名"
   type        = string
   default     = "{{ cloudflare_project_name }}"
 }
 
+# 本番環境のブランチ名
+# このブランチへのプッシュが本番デプロイのトリガーになります
 variable "production_branch" {
   description = "本番環境のブランチ名"
   type        = string

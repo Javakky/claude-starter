@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform
+  group: terraform-apply
   cancel-in-progress: false
 
 jobs:
@@ -20,7 +20,12 @@ jobs:
 
       - name: Terraform セットアップ・検証
         uses: ./.github/actions/setup-terraform
-
+{% endraw %}{% if terraform_backend == "cloud" %}{% raw %}        with:
+          tf_api_token: ${{ secrets.TF_API_TOKEN }}
+{% endraw %}{% elif terraform_backend == "s3" %}{% raw %}        with:
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+{% endraw %}{% endif %}{% raw %}
       - name: terraform plan
         working-directory: infra
         env:
@@ -28,7 +33,7 @@ jobs:
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set +e
-          terraform plan -out=tfplan -no-color 2>&1 | tee plan_output.txt
+          terraform plan -input=false -out=tfplan -no-color 2>&1 | tee plan_output.txt
           PLAN_EXIT=$?
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat plan_output.txt >> $GITHUB_STEP_SUMMARY
@@ -41,7 +46,7 @@ jobs:
         with:
           name: tfplan
           path: infra/tfplan
-          retention-days: 1
+          retention-days: 3
 
   apply:
     needs: plan
@@ -53,7 +58,12 @@ jobs:
 
       - name: Terraform セットアップ・検証
         uses: ./.github/actions/setup-terraform
-
+{% endraw %}{% if terraform_backend == "cloud" %}{% raw %}        with:
+          tf_api_token: ${{ secrets.TF_API_TOKEN }}
+{% endraw %}{% elif terraform_backend == "s3" %}{% raw %}        with:
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+{% endraw %}{% endif %}{% raw %}
       - name: plan ファイルをダウンロード
         uses: actions/download-artifact@v4
         with:
@@ -65,5 +75,5 @@ jobs:
         env:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: terraform apply tfplan
+        run: terraform apply -input=false tfplan
 {% endraw %}
