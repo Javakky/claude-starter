@@ -81,7 +81,7 @@ runs:
         REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
         REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
       run: |
-        DEFAULT_REVIEW_PROMPT=$(cat <<'EOF'
+        DEFAULT_REVIEW_PROMPT=$(cat <<'EOF' | sed 's/^        //'
         この PR の変更内容をレビューしてください。
 
         出力ルール:
@@ -217,7 +217,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        prompt: "${{ inputs.prompt }}"
+        prompt: "${{ steps.review_prompt.outputs.content }}"
         track_progress: true
         allowed_bots: "${{ inputs.allowed_bots }}"
         claude_args: |
@@ -242,8 +242,11 @@ runs:
           exit 1
         fi
 
-        PR_FILES_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate 2>/dev/null || echo '[]')
-        export PR_FILES_JSON
+        PR_FILES_JSONL=.review-pr-files.jsonl
+        if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[]' > "$PR_FILES_JSONL" 2>/dev/null; then
+          : > "$PR_FILES_JSONL"
+        fi
+        export PR_FILES_JSONL
         COMMIT_ID=$(git rev-parse HEAD)
         export COMMIT_ID
         export REVIEW_RUN_ID REVIEW_HEAD_SHA
@@ -288,7 +291,12 @@ runs:
         changed = set()
         valid_right_lines = {}
         try:
-            files_data = json.loads(os.environ.get("PR_FILES_JSON", "[]"))
+            files_data = []
+            for raw_line in Path(os.environ["PR_FILES_JSONL"]).read_text(encoding="utf-8").splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                files_data.append(json.loads(raw_line))
             for f in files_data:
                 p = f.get("filename")
                 if p:
@@ -354,10 +362,10 @@ runs:
 
         def render_body(item):
             return "\n".join([
-                f"問題: {item.get('title', '').strip()}",
-                f"根拠: {item.get('evidence', '').strip()}",
-                f"修正案: {item.get('suggestion', '').strip()}",
-                f"影響: {item.get('impact', '').strip()}",
+                f"問題: {str(item.get('title', '')).strip()}",
+                f"根拠: {str(item.get('evidence', '')).strip()}",
+                f"修正案: {str(item.get('suggestion', '')).strip()}",
+                f"影響: {str(item.get('impact', '')).strip()}",
             ])
 
         def review_marker(path, requested_line, title):
@@ -370,6 +378,12 @@ runs:
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             ).decode("ascii")
             return f"<!-- codex-review-key:{encoded} -->"
+
+        def render_comment_body(body, marker, max_length=65000):
+            available = max_length - len(marker) - 1
+            if available < 0:
+                raise SystemExit("review marker is longer than the supported comment length")
+            return f"{body[:available]}\n{marker}"
 
         def nearest_valid_line(path, requested_line):
             valid = sorted(valid_right_lines.get(path, set()))
@@ -429,11 +443,12 @@ runs:
                     fallback.append(f"- [fallback:{reason}] `{path}:{line}`\n{detail}\n{body}")
                     continue
 
+            marker = review_marker(path, requested_line, raw.get("title", ""))
             comments.append({
                 "path": path,
                 "line": line,
                 "side": "RIGHT",
-                "body": "\n".join([body, review_marker(path, requested_line, raw.get("title", ""))])[:65000],
+                "body": render_comment_body(body, marker),
             })
 
         if max_blocking_sev >= severity_rank["high"]:
@@ -594,8 +609,11 @@ runs:
           exit 1
         fi
 
-        PR_FILES_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate 2>/dev/null || echo '[]')
-        export PR_FILES_JSON
+        PR_FILES_JSONL=.review-pr-files.jsonl
+        if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[]' > "$PR_FILES_JSONL" 2>/dev/null; then
+          : > "$PR_FILES_JSONL"
+        fi
+        export PR_FILES_JSONL
         COMMIT_ID=$(git rev-parse HEAD)
         export COMMIT_ID
         export REVIEW_RUN_ID REVIEW_HEAD_SHA
@@ -640,7 +658,12 @@ runs:
         changed = set()
         valid_right_lines = {}
         try:
-            files_data = json.loads(os.environ.get("PR_FILES_JSON", "[]"))
+            files_data = []
+            for raw_line in Path(os.environ["PR_FILES_JSONL"]).read_text(encoding="utf-8").splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                files_data.append(json.loads(raw_line))
             for f in files_data:
                 p = f.get("filename")
                 if p:
@@ -706,10 +729,10 @@ runs:
 
         def render_body(item):
             return "\n".join([
-                f"問題: {item.get('title', '').strip()}",
-                f"根拠: {item.get('evidence', '').strip()}",
-                f"修正案: {item.get('suggestion', '').strip()}",
-                f"影響: {item.get('impact', '').strip()}",
+                f"問題: {str(item.get('title', '')).strip()}",
+                f"根拠: {str(item.get('evidence', '')).strip()}",
+                f"修正案: {str(item.get('suggestion', '')).strip()}",
+                f"影響: {str(item.get('impact', '')).strip()}",
             ])
 
         def review_marker(path, requested_line, title):
@@ -722,6 +745,12 @@ runs:
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             ).decode("ascii")
             return f"<!-- codex-review-key:{encoded} -->"
+
+        def render_comment_body(body, marker, max_length=65000):
+            available = max_length - len(marker) - 1
+            if available < 0:
+                raise SystemExit("review marker is longer than the supported comment length")
+            return f"{body[:available]}\n{marker}"
 
         def nearest_valid_line(path, requested_line):
             valid = sorted(valid_right_lines.get(path, set()))
@@ -781,11 +810,12 @@ runs:
                     fallback.append(f"- [fallback:{reason}] `{path}:{line}`\n{detail}\n{body}")
                     continue
 
+            marker = review_marker(path, requested_line, raw.get("title", ""))
             comments.append({
                 "path": path,
                 "line": line,
                 "side": "RIGHT",
-                "body": "\n".join([body, review_marker(path, requested_line, raw.get("title", ""))])[:65000],
+                "body": render_comment_body(body, marker),
             })
 
         if max_blocking_sev >= severity_rank["high"]:
@@ -1111,3 +1141,21 @@ runs:
       shell: bash
       run: |
         echo "::warning::codex_github_token が未設定のため stale review thread の自動解決をスキップしました"
+
+    - name: Cleanup temp files
+      if: always()
+      shell: bash
+      run: |
+        rm -f \
+          .review-pr-files.jsonl \
+          .review-payload.json \
+          .review-comments.json \
+          .review-comments.ndjson \
+          .review-fallback.md \
+          .review-fallback-all.md \
+          .review-post.err \
+          .review-comment.err \
+          .review-meta.env \
+          .review-threads.json \
+          .review-thread-ids.txt \
+          .review-thread-resolve.err
