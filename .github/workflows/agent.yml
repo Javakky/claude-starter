@@ -17,6 +17,7 @@ concurrency:
     agent-impl-${{ github.event.issue.number }}
     -${{ contains(github.event.comment.body, '[review]') && 'review' || 'implement' }}
     -${{ github.event.comment.user.type == 'Bot' && 'bot' || 'user' }}
+    -${{ (contains(github.event.comment.body, '@claude') || contains(github.event.comment.body, '@codex')) && 'mention' || 'no-mention' }}
   cancel-in-progress: true
 
 jobs:
