@@ -72,7 +72,29 @@ claude login
 | `CODEX_CODE_OAUTH_TOKEN` | Codex（OpenAI）の API キー |
 | `CODEX_AUTH_JSON` | Codex の認証情報（`auth.json` を Base64 エンコードした値）。API キーの代わりに使用可能 |
 
-> **Note**: `CODEX_CODE_OAUTH_TOKEN` と `CODEX_AUTH_JSON` はどちらか一方のみで動作します。両方が設定されている場合は `CODEX_AUTH_JSON` が優先されます。
+> **Note**: `CODEX_CODE_OAUTH_TOKEN` には `platform.openai.com/api-keys` で発行した OpenAI API key を入れてください。CI の本命はこちらです。
+>
+> **Note**: `CODEX_AUTH_JSON` は一時回避やローカル検証向けです。CI で使う場合は、普段使っている `~/.codex/auth.json` を流用せず、CI 専用に作成してください。
+
+#### CI 専用 `CODEX_AUTH_JSON` の作り方
+
+`CODEX_AUTH_JSON` を使う場合は、ローカルと共有しない CI 専用の `auth.json` を作ってください。通常の `~/.codex/auth.json` をそのまま GitHub Secrets に入れると、refresh token の競合で壊れやすくなります。
+
+このリポジトリには補助スクリプトを用意しています。
+
+```bash
+./scripts/create_codex_ci_auth.sh
+```
+
+このスクリプトは以下を行います。
+
+- 一時ディレクトリを `HOME` にした隔離環境を作成
+- `codex login` を実行
+- 作成された `auth.json` を macOS / Linux 両対応の Base64 形式で標準出力に表示
+
+出力された Base64 文字列を GitHub Secret `CODEX_AUTH_JSON` に登録してください。
+
+> **Important**: CI 用に作った `auth.json` はローカルで使わないでください。ローカルと CI で同じ認証情報を共有すると `refresh_token_reused` が発生しやすくなります。
 
 ### 4. 試してみる
 Issueを作成し、`@claude こんにちは！` とコメントして、Claudeが応答するか確認してみましょう。
@@ -121,14 +143,6 @@ copier update
 3.  必要に応じて修正指示や再レビューを依頼します。
     *   🛠️ 修正指示: `@claude <修正内容>`
     *   🔄 再レビュー: `@claude [review]`
-
-#### 自動レビューのコメント投稿ポリシー
-
-- レビュー指摘は構造化ファイル（`.codex-review-findings.json`）として生成されます。
-- `medium` 以上の指摘は PR の差分行に line comment として投稿されます。
-- `low` はノイズ抑制のため line comment にせず、会話コメントへ集約されます。
-- `high` / `critical` が 1 件以上ある場合、レビューイベントは `REQUEST_CHANGES` になります。
-- `path` / `line` が差分に一致しない場合や API 投稿失敗時は、理由付きで PR conversation へフォールバックします。
 
 --- 
 

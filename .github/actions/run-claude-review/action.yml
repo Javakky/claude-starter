@@ -21,6 +21,10 @@ inputs:
     description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
     required: false
     default: ""
+  allowed_review_authors:
+    description: "stale review thread 自動解決の対象とする review author login の追加 allowlist（カンマ区切り）"
+    required: false
+    default: ""
   mention_type:
     description: "メンションの種類（claude, codex, auto）。auto の場合は Claude 優先でトークンの有無によりフォールバック"
     required: false
@@ -31,6 +35,14 @@ inputs:
     default: ""
   pr_number:
     description: "PR 番号（Codex の PR コンテキスト取得に使用）"
+    required: false
+    default: ""
+  trusted_actions_ref:
+    description: "信頼済み action 定義を checkout する ref"
+    required: false
+    default: ""
+  head_sha:
+    description: "PR の head SHA（成果物の freshness 検証に使用）"
     required: false
     default: ""
   head_ref:
@@ -66,6 +78,8 @@ runs:
       shell: bash
       env:
         PROMPT: ${{ inputs.prompt }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
       run: |
         DEFAULT_REVIEW_PROMPT=$(cat <<'EOF'
         この PR の変更内容をレビューしてください。
@@ -76,11 +90,15 @@ runs:
         3. `.codex-review-findings.json` は次の形式に従う
         {
           "summary": "全体サマリー",
+          "generated_by_run_id": "__REVIEW_RUN_ID__",
+          "generated_for_head_sha": "__REVIEW_HEAD_SHA__",
           "findings": [
             {
               "path": "ファイルパス",
               "line": 123,
               "severity": "low|medium|high|critical",
+              "is_blocking": true,
+              "tracking_issue": "https://github.com/owner/repo/issues/123 or ''",
               "title": "問題の要約",
               "evidence": "根拠",
               "suggestion": "修正案",
@@ -92,8 +110,12 @@ runs:
         注記:
         - 行コメント対象は medium 以上
         - low はサマリーのみで可
+        - 既知のフォローアップ issue として管理済みの課題は `is_blocking: false` とし、`tracking_issue` に issue URL か issue 番号文字列を入れる
+        - `is_blocking: true` にするのは、この PR を止めるべき未管理の問題だけ
         EOF
         )
+        DEFAULT_REVIEW_PROMPT=${DEFAULT_REVIEW_PROMPT//__REVIEW_RUN_ID__/$REVIEW_RUN_ID}
+        DEFAULT_REVIEW_PROMPT=${DEFAULT_REVIEW_PROMPT//__REVIEW_HEAD_SHA__/$REVIEW_HEAD_SHA}
 
         if [ -z "$PROMPT" ] || [ "$PROMPT" = "/review" ]; then
           FINAL_PROMPT="$DEFAULT_REVIEW_PROMPT"
@@ -106,7 +128,30 @@ runs:
         echo "$FINAL_PROMPT" >> $GITHUB_OUTPUT
         echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
-    # mention_type の解決（auto の場合は Claude 優先でフォールバック）
+    - name: Remove stale review artifacts
+      shell: bash
+      run: |
+        rm -f \
+          .codex-review-findings.json \
+          .codex-summary.md \
+          .codex-last-message.md \
+          .review-payload.json \
+          .review-comments.json \
+          .review-comments.ndjson \
+          .review-fallback.md \
+          .review-fallback-all.md \
+          .review-post.err \
+          .review-comment.err \
+          .review-meta.env
+
+    - name: Restore trusted nested actions
+      if: inputs.trusted_actions_ref != ''
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.trusted_actions_ref }}
+        fetch-depth: 0
+        path: .trusted-review-base
+
     - name: Resolve mention type
       id: resolve
       shell: bash
@@ -120,18 +165,14 @@ runs:
         HAS_CODEX="false"
         if [ -n "$CLAUDE_TOKEN" ]; then HAS_CLAUDE="true"; fi
         if [ -n "$CODEX_TOKEN" ] || [ -n "$CODEX_AUTH" ]; then HAS_CODEX="true"; fi
-
-        # 空文字列は auto として扱う
         [ -z "$INPUT_MENTION_TYPE" ] && INPUT_MENTION_TYPE="auto"
 
-        # 明示的に指定された場合はそのまま使用
         if [ "$INPUT_MENTION_TYPE" = "claude" ]; then
           if [ "$HAS_CLAUDE" != "true" ]; then
             echo "::error::mention_type=claude が指定されましたが、claude_code_oauth_token がありません"
             exit 1
           fi
           echo "mention_type=claude" >> $GITHUB_OUTPUT
-          echo "mention_type: claude（明示指定）"
           exit 0
         fi
 
@@ -141,17 +182,13 @@ runs:
             exit 1
           fi
           echo "mention_type=codex" >> $GITHUB_OUTPUT
-          echo "mention_type: codex（明示指定）"
           exit 0
         fi
 
-        # auto モード: Claude 優先でフォールバック
         if [ "$HAS_CLAUDE" = "true" ]; then
           echo "mention_type=claude" >> $GITHUB_OUTPUT
-          echo "mention_type: claude（auto）"
         elif [ "$HAS_CODEX" = "true" ]; then
           echo "mention_type=codex" >> $GITHUB_OUTPUT
-          echo "mention_type: codex（auto - Claude トークンなし、Codex にフォールバック）"
         else
           echo "::error::使用可能なトークンがありません（claude_code_oauth_token または codex_code_oauth_token/codex_auth_json が必要）"
           exit 1
@@ -163,20 +200,15 @@ runs:
       uses: actions/github-script@v7
       env:
         COMMENT_BODY: ${{ inputs.comment_body }}
-        MODEL: ${{ inputs.model }}
-        MAX_TURNS: ${{ inputs.max_turns }}
       with:
         script: |
           const body = process.env.COMMENT_BODY || "";
-
           const model =
             body.includes("[sonnet]") ? "sonnet" :
             body.includes("[opus]")   ? "opus"   :
-            body.includes("[haiku]")  ? "haiku"  : process.env.MODEL || "opus";
-
+            body.includes("[haiku]")  ? "haiku"  : "${{ inputs.model }}";
           const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-          const maxTurns = m ? Number(m[1]) : Number(process.env.MAX_TURNS || "30");
-
+          const maxTurns = m ? Number(m[1]) : Number("${{ inputs.max_turns }}");
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
 
@@ -198,58 +230,127 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.codex_github_token != '' && inputs.codex_github_token || inputs.github_token }}
+        REVIEW_CAN_APPROVE: ${{ inputs.codex_github_token != '' && 'true' || 'false' }}
         PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
       run: |
         set -euo pipefail
 
         if [ ! -f .codex-review-findings.json ]; then
-          echo "skip: .codex-review-findings.json not found"
-          exit 0
-        fi
-
-        if ! command -v python3 >/dev/null 2>&1; then
-          echo "python3 is required to publish structured review comments"
+          echo "::error::.codex-review-findings.json not found"
           exit 1
         fi
 
-        PR_FILES_JSON=$(gh pr view "$PR_NUMBER" --json files 2>/dev/null || echo '{"files":[]}')
+        PR_FILES_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate 2>/dev/null || echo '[]')
         export PR_FILES_JSON
+        COMMIT_ID=$(git rev-parse HEAD)
+        export COMMIT_ID
+        export REVIEW_RUN_ID REVIEW_HEAD_SHA
 
         python3 <<'PY'
+        import base64
         import json
         import os
+        import re
         from pathlib import Path
 
         findings_path = Path(".codex-review-findings.json")
         output_payload = Path(".review-payload.json")
+        comments_payload = Path(".review-comments.json")
         fallback_path = Path(".review-fallback.md")
         meta_path = Path(".review-meta.env")
 
-        summary = ""
-        findings = []
+        required_keys = ("path", "line", "severity", "is_blocking", "tracking_issue", "title", "evidence", "suggestion", "impact")
         try:
             data = json.loads(findings_path.read_text(encoding="utf-8"))
-            summary = str(data.get("summary", "")).strip()
-            findings = data.get("findings", []) or []
         except Exception as exc:
-            fallback_path.write_text(f"⚠️ Structured review parsing failed: {exc}\n", encoding="utf-8")
-            meta_path.write_text("COMMENTS_COUNT=0\nFALLBACK_COUNT=1\nREVIEW_EVENT=COMMENT\n", encoding="utf-8")
-            raise SystemExit(0)
+            raise SystemExit(f"Structured review parsing failed: {exc}")
+        if not isinstance(data, dict):
+            raise SystemExit("Structured review payload must be a JSON object")
+
+        summary = str(data.get("summary", "")).strip()
+        findings = data.get("findings")
+        generated_by_run_id = str(data.get("generated_by_run_id", "")).strip()
+        generated_for_head_sha = str(data.get("generated_for_head_sha", "")).strip()
+        expected_run_id = os.environ["REVIEW_RUN_ID"]
+        expected_head_sha = os.environ["REVIEW_HEAD_SHA"]
+
+        if not summary:
+            raise SystemExit("Structured review payload missing non-empty summary")
+        if generated_by_run_id != expected_run_id:
+            raise SystemExit(f"Structured review payload run mismatch: expected {expected_run_id}, got {generated_by_run_id or '<empty>'}")
+        if generated_for_head_sha != expected_head_sha:
+            raise SystemExit(f"Structured review payload head SHA mismatch: expected {expected_head_sha}, got {generated_for_head_sha or '<empty>'}")
+        if not isinstance(findings, list):
+            raise SystemExit("Structured review payload findings must be an array")
 
         changed = set()
+        valid_right_lines = {}
         try:
-            files_data = json.loads(os.environ.get("PR_FILES_JSON", "{}"))
-            for f in files_data.get("files", []):
-                p = f.get("path")
+            files_data = json.loads(os.environ.get("PR_FILES_JSON", "[]"))
+            for f in files_data:
+                p = f.get("filename")
                 if p:
                     changed.add(p)
+                patch = f.get("patch")
+                if not p or not patch:
+                    continue
+                right_lines = set()
+                current_new = None
+                for raw_line in patch.splitlines():
+                    if raw_line.startswith("@@"):
+                        match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw_line)
+                        if not match:
+                            current_new = None
+                            continue
+                        current_new = int(match.group(1))
+                        continue
+                    if current_new is None:
+                        continue
+                    if raw_line.startswith("\\"):
+                        continue
+                    if raw_line.startswith((" ", "+")):
+                        right_lines.add(current_new)
+                        current_new += 1
+                    elif raw_line.startswith("-"):
+                        continue
+                    else:
+                        current_new += 1
+                valid_right_lines[p] = right_lines
         except Exception:
             pass
 
         severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        nearest_line_threshold = 3
         comments = []
         fallback = []
         max_sev = 0
+        max_blocking_sev = 0
+
+        def parse_blocking(raw_value):
+            if isinstance(raw_value, bool):
+                return raw_value
+            if raw_value is None:
+                return True
+            normalized = str(raw_value).strip().lower()
+            if normalized in ("true", "1", "yes"):
+                return True
+            if normalized in ("false", "0", "no"):
+                return False
+            raise SystemExit(f"Finding is_blocking must be a boolean-compatible value: {raw_value!r}")
+
+        def validate_tracking_issue(raw_value, is_blocking):
+            value = str(raw_value or "").strip()
+            if is_blocking:
+                return value
+            if not value:
+                raise SystemExit("Non-blocking finding must include tracking_issue")
+            if re.fullmatch(r"#?\d+", value):
+                return value
+            if re.fullmatch(r"https://github\.com/[^/]+/[^/]+/issues/\d+", value):
+                return value
+            raise SystemExit(f"tracking_issue must be an issue number or GitHub issue URL: {raw_value!r}")
 
         def render_body(item):
             return "\n".join([
@@ -259,41 +360,94 @@ runs:
                 f"影響: {item.get('impact', '').strip()}",
             ])
 
+        def review_marker(path, requested_line, title):
+            payload = {
+                "path": path,
+                "line": requested_line,
+                "title": " ".join(str(title or "").strip().split()),
+            }
+            encoded = base64.b64encode(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).decode("ascii")
+            return f"<!-- codex-review-key:{encoded} -->"
+
+        def nearest_valid_line(path, requested_line):
+            valid = sorted(valid_right_lines.get(path, set()))
+            if not valid:
+                return None
+            return min(valid, key=lambda candidate: abs(candidate - requested_line))
+
         for raw in findings:
             if not isinstance(raw, dict):
-                continue
+                raise SystemExit("Each finding must be a JSON object")
+            missing = [key for key in required_keys if key not in raw]
+            if missing:
+                raise SystemExit(f"Finding missing required keys: {', '.join(missing)}")
             sev = str(raw.get("severity", "low")).lower()
             if sev not in severity_rank:
-                sev = "low"
+                raise SystemExit(f"Invalid finding severity: {sev}")
+            is_blocking = parse_blocking(raw.get("is_blocking"))
+            validate_tracking_issue(raw.get("tracking_issue"), is_blocking)
             max_sev = max(max_sev, severity_rank[sev])
+            if is_blocking:
+                max_blocking_sev = max(max_blocking_sev, severity_rank[sev])
             path = str(raw.get("path", "")).strip()
-            line = raw.get("line")
+            if not path:
+                raise SystemExit("Finding path must be a non-empty string")
+            line_raw = raw.get("line")
             body = render_body(raw)
+            for key in ("title", "evidence", "suggestion", "impact"):
+                if not str(raw.get(key, "")).strip():
+                    raise SystemExit(f"Finding field '{key}' must be non-empty")
+            try:
+                line = int(line_raw)
+            except (TypeError, ValueError):
+                raise SystemExit(f"Finding line must be an integer-compatible value: {line_raw!r}")
+            requested_line = line
 
             if sev == "low":
-                fallback.append(f"- [low] `{path}:{line}` {raw.get('title', '')}")
                 continue
-            if not path or path not in changed:
-                fallback.append(f"- [fallback:invalid_path] `{path}:{line}`\n{body}")
-                continue
-            if not isinstance(line, int) or line <= 0:
-                fallback.append(f"- [fallback:invalid_line] `{path}:{line}`\n{body}")
-                continue
+            if path not in changed:
+                raise SystemExit(f"Finding path is outside PR diff: {path}")
+            if line <= 0:
+                raise SystemExit(f"Finding line must be positive: {line}")
+            if path in valid_right_lines and valid_right_lines[path] and line not in valid_right_lines[path]:
+                nearest = nearest_valid_line(path, line)
+                if nearest is not None and abs(nearest - line) <= nearest_line_threshold:
+                    body = "\n".join([
+                        body,
+                        "",
+                        f"補足: requested_line={line}, nearest_valid_line={nearest}",
+                    ])
+                    line = nearest
+                else:
+                    reason = "not_in_diff"
+                    detail = f"requested_line={line}"
+                    if nearest is not None:
+                        reason = "not_in_diff_out_of_range"
+                        detail = f"requested_line={line}, nearest_valid_line={nearest}"
+                    fallback.append(f"- [fallback:{reason}] `{path}:{line}`\n{detail}\n{body}")
+                    continue
 
             comments.append({
                 "path": path,
                 "line": line,
                 "side": "RIGHT",
-                "body": body[:65000],
+                "body": "\n".join([body, review_marker(path, requested_line, raw.get("title", ""))])[:65000],
             })
 
-        review_event = "REQUEST_CHANGES" if max_sev >= severity_rank["high"] else "COMMENT"
+        if max_blocking_sev >= severity_rank["high"]:
+            review_event = "REQUEST_CHANGES"
+        elif max_sev >= severity_rank["medium"]:
+            review_event = "COMMENT"
+        else:
+            review_event = "APPROVE"
         payload = {
             "event": review_event,
             "body": summary or "AI review findings",
-            "comments": comments,
         }
         output_payload.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        comments_payload.write_text(json.dumps(comments, ensure_ascii=False), encoding="utf-8")
 
         if fallback:
             base = "⚠️ 一部の指摘は行コメントにできなかったため conversation にフォールバックしました。\n\n"
@@ -307,26 +461,90 @@ runs:
         )
         PY
 
-        # shellcheck disable=SC1091
         source .review-meta.env
 
-        if [ "${COMMENTS_COUNT:-0}" -gt 0 ]; then
-          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
-            ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
-            {
-              echo "⚠️ review API 投稿に失敗したため conversation にフォールバックしました。"
-              echo
-              echo "reason: api_error"
-              echo "detail: ${ERR_MSG}"
-              echo
-              cat .review-fallback.md 2>/dev/null || true
-            } > .review-fallback-all.md
-            gh pr comment "$PR_NUMBER" --body-file .review-fallback-all.md >/dev/null || true
-            exit 0
+        if [ "$REVIEW_EVENT" = "APPROVE" ] && [ "$REVIEW_CAN_APPROVE" != "true" ]; then
+          echo "::warning::codex_github_token が未設定のため APPROVE を COMMENT にフォールバックします"
+          python3 <<'PY'
+        import json
+        from pathlib import Path
+
+        payload_path = Path(".review-payload.json")
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        body = str(payload.get("body", "")).strip()
+        note = "Note: APPROVE requires codex_github_token, so this result is posted as COMMENT."
+        payload["event"] = "COMMENT"
+        payload["body"] = f"{body}\n\n{note}" if body else note
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        PY
+          REVIEW_EVENT="COMMENT"
+        fi
+
+        if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+          ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+          if [ "$REVIEW_EVENT" = "APPROVE" ] && printf '%s' "$ERR_MSG" | grep -q "Unprocessable Entity"; then
+            echo "::warning::APPROVE review が拒否されたため COMMENT にフォールバックします"
+            python3 <<'PY'
+        import json
+        from pathlib import Path
+
+        payload_path = Path(".review-payload.json")
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        body = str(payload.get("body", "")).strip()
+        note = "Note: APPROVE could not be submitted, so this result is posted as COMMENT."
+        payload["event"] = "COMMENT"
+        payload["body"] = f"{body}\n\n{note}" if body else note
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        PY
+            if gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+              REVIEW_EVENT="COMMENT"
+              : > .review-post.err
+            else
+              ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+            fi
           fi
         fi
 
-        if [ "${FALLBACK_COUNT:-0}" -gt 0 ] && [ -s .review-fallback.md ]; then
+        if [ -f .review-post.err ] && [ -s .review-post.err ]; then
+          ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+          {
+            echo "⚠️ review API 投稿に失敗したため conversation にフォールバックしました。"
+            echo
+            echo "reason: api_error"
+            echo "detail: ${ERR_MSG}"
+            echo
+            cat .review-fallback.md 2>/dev/null || true
+          } > .review-fallback-all.md
+          gh pr comment "$PR_NUMBER" --body-file .review-fallback-all.md >/dev/null || true
+          exit 0
+        fi
+
+        python3 <<'PY' > .review-comments.ndjson
+        import base64
+        import json
+        from pathlib import Path
+
+        for item in json.loads(Path(".review-comments.json").read_text(encoding="utf-8")):
+            body = base64.b64encode(item["body"].encode("utf-8")).decode("ascii")
+            print(f'{item["path"]}\t{item["line"]}\t{body}')
+        PY
+
+        while IFS=$'\t' read -r path line body_b64; do
+          [ -z "$path" ] && continue
+          body=$(printf '%s' "$body_b64" | base64 -d)
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
+            -X POST \
+            -f body="$body" \
+            -f commit_id="$COMMIT_ID" \
+            -f path="$path" \
+            -F line="$line" \
+            -f side="RIGHT" >/dev/null 2>.review-comment.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-comment.err | sed 's/[[:space:]]\+/ /g')
+            printf '%s\n%s\n\n' "- [fallback:api_error] \`$path:$line\`" "$ERR_MSG" >> .review-fallback.md
+          fi
+        done < .review-comments.ndjson
+
+        if [ -s .review-fallback.md ]; then
           gh pr comment "$PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
         fi
 
@@ -345,7 +563,7 @@ runs:
 
     - name: Run Codex
       if: steps.resolve.outputs.mention_type == 'codex'
-      uses: Javakky/claude-starter/.github/actions/run-codex@master
+      uses: ./.trusted-review-base/.github/actions/run-codex
       with:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
@@ -353,9 +571,543 @@ runs:
         bot_github_token: ${{ inputs.codex_github_token }}
         prompt: ${{ steps.codex_prompt.outputs.content }}
         comment_body: ${{ inputs.comment_body }}
-        issue_number: ${{ inputs.issue_number }}
+        issue_number: ""
         pr_number: ${{ inputs.pr_number }}
         head_ref: ${{ inputs.head_ref }}
         auto_commit: "false"
-        review_mode: "true"
-        review_pr_number: ${{ inputs.pr_number }}
+        fail_on_error: "true"
+
+    - name: Publish Codex review comments
+      if: steps.resolve.outputs.mention_type == 'codex' && inputs.pr_number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.codex_github_token != '' && inputs.codex_github_token || inputs.github_token }}
+        REVIEW_CAN_APPROVE: ${{ inputs.codex_github_token != '' && 'true' || 'false' }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f .codex-review-findings.json ]; then
+          echo "::error::.codex-review-findings.json not found"
+          exit 1
+        fi
+
+        PR_FILES_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate 2>/dev/null || echo '[]')
+        export PR_FILES_JSON
+        COMMIT_ID=$(git rev-parse HEAD)
+        export COMMIT_ID
+        export REVIEW_RUN_ID REVIEW_HEAD_SHA
+
+        python3 <<'PY'
+        import base64
+        import json
+        import os
+        import re
+        from pathlib import Path
+
+        findings_path = Path(".codex-review-findings.json")
+        output_payload = Path(".review-payload.json")
+        comments_payload = Path(".review-comments.json")
+        fallback_path = Path(".review-fallback.md")
+        meta_path = Path(".review-meta.env")
+
+        required_keys = ("path", "line", "severity", "is_blocking", "tracking_issue", "title", "evidence", "suggestion", "impact")
+        try:
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise SystemExit(f"Structured review parsing failed: {exc}")
+        if not isinstance(data, dict):
+            raise SystemExit("Structured review payload must be a JSON object")
+
+        summary = str(data.get("summary", "")).strip()
+        findings = data.get("findings")
+        generated_by_run_id = str(data.get("generated_by_run_id", "")).strip()
+        generated_for_head_sha = str(data.get("generated_for_head_sha", "")).strip()
+        expected_run_id = os.environ["REVIEW_RUN_ID"]
+        expected_head_sha = os.environ["REVIEW_HEAD_SHA"]
+
+        if not summary:
+            raise SystemExit("Structured review payload missing non-empty summary")
+        if generated_by_run_id != expected_run_id:
+            raise SystemExit(f"Structured review payload run mismatch: expected {expected_run_id}, got {generated_by_run_id or '<empty>'}")
+        if generated_for_head_sha != expected_head_sha:
+            raise SystemExit(f"Structured review payload head SHA mismatch: expected {expected_head_sha}, got {generated_for_head_sha or '<empty>'}")
+        if not isinstance(findings, list):
+            raise SystemExit("Structured review payload findings must be an array")
+
+        changed = set()
+        valid_right_lines = {}
+        try:
+            files_data = json.loads(os.environ.get("PR_FILES_JSON", "[]"))
+            for f in files_data:
+                p = f.get("filename")
+                if p:
+                    changed.add(p)
+                patch = f.get("patch")
+                if not p or not patch:
+                    continue
+                right_lines = set()
+                current_new = None
+                for raw_line in patch.splitlines():
+                    if raw_line.startswith("@@"):
+                        match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw_line)
+                        if not match:
+                            current_new = None
+                            continue
+                        current_new = int(match.group(1))
+                        continue
+                    if current_new is None:
+                        continue
+                    if raw_line.startswith("\\"):
+                        continue
+                    if raw_line.startswith((" ", "+")):
+                        right_lines.add(current_new)
+                        current_new += 1
+                    elif raw_line.startswith("-"):
+                        continue
+                    else:
+                        current_new += 1
+                valid_right_lines[p] = right_lines
+        except Exception:
+            pass
+
+        severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        nearest_line_threshold = 3
+        comments = []
+        fallback = []
+        max_sev = 0
+        max_blocking_sev = 0
+
+        def parse_blocking(raw_value):
+            if isinstance(raw_value, bool):
+                return raw_value
+            if raw_value is None:
+                return True
+            normalized = str(raw_value).strip().lower()
+            if normalized in ("true", "1", "yes"):
+                return True
+            if normalized in ("false", "0", "no"):
+                return False
+            raise SystemExit(f"Finding is_blocking must be a boolean-compatible value: {raw_value!r}")
+
+        def validate_tracking_issue(raw_value, is_blocking):
+            value = str(raw_value or "").strip()
+            if is_blocking:
+                return value
+            if not value:
+                raise SystemExit("Non-blocking finding must include tracking_issue")
+            if re.fullmatch(r"#?\d+", value):
+                return value
+            if re.fullmatch(r"https://github\.com/[^/]+/[^/]+/issues/\d+", value):
+                return value
+            raise SystemExit(f"tracking_issue must be an issue number or GitHub issue URL: {raw_value!r}")
+
+        def render_body(item):
+            return "\n".join([
+                f"問題: {item.get('title', '').strip()}",
+                f"根拠: {item.get('evidence', '').strip()}",
+                f"修正案: {item.get('suggestion', '').strip()}",
+                f"影響: {item.get('impact', '').strip()}",
+            ])
+
+        def review_marker(path, requested_line, title):
+            payload = {
+                "path": path,
+                "line": requested_line,
+                "title": " ".join(str(title or "").strip().split()),
+            }
+            encoded = base64.b64encode(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).decode("ascii")
+            return f"<!-- codex-review-key:{encoded} -->"
+
+        def nearest_valid_line(path, requested_line):
+            valid = sorted(valid_right_lines.get(path, set()))
+            if not valid:
+                return None
+            return min(valid, key=lambda candidate: abs(candidate - requested_line))
+
+        for raw in findings:
+            if not isinstance(raw, dict):
+                raise SystemExit("Each finding must be a JSON object")
+            missing = [key for key in required_keys if key not in raw]
+            if missing:
+                raise SystemExit(f"Finding missing required keys: {', '.join(missing)}")
+            sev = str(raw.get("severity", "low")).lower()
+            if sev not in severity_rank:
+                raise SystemExit(f"Invalid finding severity: {sev}")
+            is_blocking = parse_blocking(raw.get("is_blocking"))
+            validate_tracking_issue(raw.get("tracking_issue"), is_blocking)
+            max_sev = max(max_sev, severity_rank[sev])
+            if is_blocking:
+                max_blocking_sev = max(max_blocking_sev, severity_rank[sev])
+            path = str(raw.get("path", "")).strip()
+            if not path:
+                raise SystemExit("Finding path must be a non-empty string")
+            line_raw = raw.get("line")
+            body = render_body(raw)
+            for key in ("title", "evidence", "suggestion", "impact"):
+                if not str(raw.get(key, "")).strip():
+                    raise SystemExit(f"Finding field '{key}' must be non-empty")
+            try:
+                line = int(line_raw)
+            except (TypeError, ValueError):
+                raise SystemExit(f"Finding line must be an integer-compatible value: {line_raw!r}")
+            requested_line = line
+
+            if sev == "low":
+                continue
+            if path not in changed:
+                raise SystemExit(f"Finding path is outside PR diff: {path}")
+            if line <= 0:
+                raise SystemExit(f"Finding line must be positive: {line}")
+            if path in valid_right_lines and valid_right_lines[path] and line not in valid_right_lines[path]:
+                nearest = nearest_valid_line(path, line)
+                if nearest is not None and abs(nearest - line) <= nearest_line_threshold:
+                    body = "\n".join([
+                        body,
+                        "",
+                        f"補足: requested_line={line}, nearest_valid_line={nearest}",
+                    ])
+                    line = nearest
+                else:
+                    reason = "not_in_diff"
+                    detail = f"requested_line={line}"
+                    if nearest is not None:
+                        reason = "not_in_diff_out_of_range"
+                        detail = f"requested_line={line}, nearest_valid_line={nearest}"
+                    fallback.append(f"- [fallback:{reason}] `{path}:{line}`\n{detail}\n{body}")
+                    continue
+
+            comments.append({
+                "path": path,
+                "line": line,
+                "side": "RIGHT",
+                "body": "\n".join([body, review_marker(path, requested_line, raw.get("title", ""))])[:65000],
+            })
+
+        if max_blocking_sev >= severity_rank["high"]:
+            review_event = "REQUEST_CHANGES"
+        elif max_sev >= severity_rank["medium"]:
+            review_event = "COMMENT"
+        else:
+            review_event = "APPROVE"
+        payload = {
+            "event": review_event,
+            "body": summary or "AI review findings",
+        }
+        output_payload.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        comments_payload.write_text(json.dumps(comments, ensure_ascii=False), encoding="utf-8")
+
+        if fallback:
+            base = "⚠️ 一部の指摘は行コメントにできなかったため conversation にフォールバックしました。\n\n"
+            fallback_path.write_text(base + "\n".join(fallback), encoding="utf-8")
+        else:
+            fallback_path.write_text("", encoding="utf-8")
+
+        meta_path.write_text(
+            f"COMMENTS_COUNT={len(comments)}\nFALLBACK_COUNT={len(fallback)}\nREVIEW_EVENT={review_event}\n",
+            encoding="utf-8"
+        )
+        PY
+
+        source .review-meta.env
+
+        if [ "$REVIEW_EVENT" = "APPROVE" ] && [ "$REVIEW_CAN_APPROVE" != "true" ]; then
+          echo "::warning::codex_github_token が未設定のため APPROVE を COMMENT にフォールバックします"
+          python3 <<'PY'
+        import json
+        from pathlib import Path
+
+        payload_path = Path(".review-payload.json")
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        body = str(payload.get("body", "")).strip()
+        note = "Note: APPROVE requires codex_github_token, so this result is posted as COMMENT."
+        payload["event"] = "COMMENT"
+        payload["body"] = f"{body}\n\n{note}" if body else note
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        PY
+          REVIEW_EVENT="COMMENT"
+        fi
+
+        if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+          ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+          if [ "$REVIEW_EVENT" = "APPROVE" ] && printf '%s' "$ERR_MSG" | grep -q "Unprocessable Entity"; then
+            echo "::warning::APPROVE review が拒否されたため COMMENT にフォールバックします"
+            python3 <<'PY'
+        import json
+        from pathlib import Path
+
+        payload_path = Path(".review-payload.json")
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        body = str(payload.get("body", "")).strip()
+        note = "Note: APPROVE could not be submitted, so this result is posted as COMMENT."
+        payload["event"] = "COMMENT"
+        payload["body"] = f"{body}\n\n{note}" if body else note
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        PY
+            if gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+              REVIEW_EVENT="COMMENT"
+              : > .review-post.err
+            else
+              ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+            fi
+          fi
+        fi
+
+        if [ -f .review-post.err ] && [ -s .review-post.err ]; then
+          ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+          {
+            echo "⚠️ review API 投稿に失敗したため conversation にフォールバックしました。"
+            echo
+            echo "reason: api_error"
+            echo "detail: ${ERR_MSG}"
+            echo
+            cat .review-fallback.md 2>/dev/null || true
+          } > .review-fallback-all.md
+          gh pr comment "$PR_NUMBER" --body-file .review-fallback-all.md >/dev/null || true
+          exit 0
+        fi
+
+        python3 <<'PY' > .review-comments.ndjson
+        import base64
+        import json
+        from pathlib import Path
+
+        for item in json.loads(Path(".review-comments.json").read_text(encoding="utf-8")):
+            body = base64.b64encode(item["body"].encode("utf-8")).decode("ascii")
+            print(f'{item["path"]}\t{item["line"]}\t{body}')
+        PY
+
+        while IFS=$'\t' read -r path line body_b64; do
+          [ -z "$path" ] && continue
+          body=$(printf '%s' "$body_b64" | base64 -d)
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
+            -X POST \
+            -f body="$body" \
+            -f commit_id="$COMMIT_ID" \
+            -f path="$path" \
+            -F line="$line" \
+            -f side="RIGHT" >/dev/null 2>.review-comment.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-comment.err | sed 's/[[:space:]]\+/ /g')
+            printf '%s\n%s\n\n' "- [fallback:api_error] \`$path:$line\`" "$ERR_MSG" >> .review-fallback.md
+          fi
+        done < .review-comments.ndjson
+
+        if [ -s .review-fallback.md ]; then
+          gh pr comment "$PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
+        fi
+
+    - name: Resolve obsolete review threads
+      if: inputs.pr_number != '' && inputs.codex_github_token != '' && (steps.resolve.outputs.mention_type == 'claude' || steps.resolve.outputs.mention_type == 'codex')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.codex_github_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+        EXTRA_REVIEW_AUTHORS: ${{ inputs.allowed_review_authors }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f .codex-review-findings.json ]; then
+          echo "skip: no structured findings to compare for thread resolution"
+          exit 0
+        fi
+
+        REPO_OWNER="${GITHUB_REPOSITORY%/*}"
+        REPO_NAME="${GITHUB_REPOSITORY#*/}"
+        REVIEW_AUTHOR_LOGINS="github-actions[bot]"
+        export REPO_OWNER REPO_NAME
+
+        if [ -n "${EXTRA_REVIEW_AUTHORS:-}" ]; then
+          REVIEW_AUTHOR_LOGINS="${REVIEW_AUTHOR_LOGINS},${EXTRA_REVIEW_AUTHORS}"
+        fi
+
+        if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null); then
+          if [ -n "$BOT_LOGIN" ] && [ "$BOT_LOGIN" != "null" ]; then
+            REVIEW_AUTHOR_LOGINS="${REVIEW_AUTHOR_LOGINS},${BOT_LOGIN}"
+          fi
+        fi
+
+        export REVIEW_AUTHOR_LOGINS
+
+        if ! python3 <<'PY'
+        import json
+        import os
+        import subprocess
+        from pathlib import Path
+
+        owner = os.environ["REPO_OWNER"]
+        name = os.environ["REPO_NAME"]
+        number = os.environ["PR_NUMBER"]
+        query = """
+        query($owner:String!, $name:String!, $number:Int!, $after:String) {
+          repository(owner:$owner, name:$name) {
+            pullRequest(number:$number) {
+              reviewThreads(first:100, after:$after) {
+                nodes {
+                  id
+                  isResolved
+                  comments(first:10) {
+                    nodes {
+                      author { login }
+                      path
+                      originalLine
+                      body
+                    }
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+              }
+            }
+          }
+        }
+        """
+
+        nodes = []
+        cursor = None
+        while True:
+          cmd = [
+              "gh", "api", "graphql",
+              "-F", f"owner={owner}",
+              "-F", f"name={name}",
+              "-F", f"number={number}",
+              "-f", f"query={query}",
+          ]
+          if cursor:
+              cmd.extend(["-F", f"after={cursor}"])
+          result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+          payload = json.loads(result.stdout)
+          connection = (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {}
+          nodes.extend(connection.get("nodes") or [])
+          page_info = connection.get("pageInfo") or {}
+          if not page_info.get("hasNextPage"):
+              break
+          cursor = page_info.get("endCursor")
+          if not cursor:
+              break
+
+        Path(".review-threads.json").write_text(
+            json.dumps({"nodes": nodes}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        PY
+        then
+          echo "::warning::reviewThreads の取得に失敗したため stale review thread の自動解決をスキップしました"
+          exit 0
+        fi
+
+        if ! python3 <<'PY' > .review-thread-ids.txt
+        import base64
+        import json
+        import os
+        import re
+        from pathlib import Path
+
+        def normalize(text):
+            return " ".join(str(text or "").strip().split())
+
+        def marker_from_body(body):
+            match = re.search(r"<!--\s*codex-review-key:([A-Za-z0-9+/=]+)\s*-->", str(body or ""))
+            if not match:
+                return None
+            try:
+                payload = json.loads(base64.b64decode(match.group(1)).decode("utf-8"))
+            except Exception:
+                return None
+            path = str(payload.get("path", "")).strip()
+            title = normalize(payload.get("title", ""))
+            try:
+                line = int(payload.get("line"))
+            except (TypeError, ValueError):
+                return None
+            if not path or not title or line <= 0:
+                return None
+            return (path, line, title)
+
+        findings_payload = json.loads(Path(".codex-review-findings.json").read_text(encoding="utf-8"))
+        threads_data = json.loads(Path(".review-threads.json").read_text(encoding="utf-8"))
+        expected_run_id = os.environ["REVIEW_RUN_ID"]
+        expected_head_sha = os.environ["REVIEW_HEAD_SHA"]
+        allowed_authors = {
+            normalize(login)
+            for login in os.environ.get("REVIEW_AUTHOR_LOGINS", "").split(",")
+            if normalize(login)
+        }
+
+        if not isinstance(findings_payload, dict):
+            raise SystemExit("Structured review payload must be a JSON object for stale thread resolution")
+
+        generated_by_run_id = str(findings_payload.get("generated_by_run_id", "")).strip()
+        generated_for_head_sha = str(findings_payload.get("generated_for_head_sha", "")).strip()
+        if generated_by_run_id != expected_run_id:
+            raise SystemExit(
+                f"Structured review payload run mismatch during stale thread resolution: "
+                f"expected {expected_run_id}, got {generated_by_run_id or '<empty>'}"
+            )
+        if generated_for_head_sha != expected_head_sha:
+            raise SystemExit(
+                f"Structured review payload head SHA mismatch during stale thread resolution: "
+                f"expected {expected_head_sha}, got {generated_for_head_sha or '<empty>'}"
+            )
+
+        active = set()
+        for item in findings_payload.get("findings", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("severity", "")).lower() == "low":
+                continue
+            path = str(item.get("path", "")).strip()
+            title = normalize(item.get("title", ""))
+            try:
+                line = int(item.get("line"))
+            except (TypeError, ValueError):
+                continue
+            if path and title and line > 0:
+                active.add((path, line, title))
+
+        nodes = threads_data.get("nodes") or []
+        for node in nodes:
+            if node.get("isResolved"):
+                continue
+            comments = ((node.get("comments") or {}).get("nodes") or [])
+            if not comments:
+                continue
+            first = comments[0]
+            author = normalize(((first.get("author") or {}).get("login")) or "")
+            if author not in allowed_authors:
+                continue
+            marker = marker_from_body(first.get("body", ""))
+            if marker is None:
+                continue
+            candidate = marker
+            if candidate in active:
+                continue
+            print(node["id"])
+        PY
+        then
+          echo "::warning::stale review thread の照合に失敗したため自動解決をスキップしました"
+          exit 0
+        fi
+
+        while IFS= read -r thread_id; do
+          [ -z "$thread_id" ] && continue
+          if ! gh api graphql \
+            -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}) { thread { id isResolved } } }' \
+            -F id="$thread_id" >/dev/null 2>.review-thread-resolve.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-thread-resolve.err | sed 's/[[:space:]]\+/ /g')
+            echo "::warning::resolveReviewThread failed for $thread_id: $ERR_MSG"
+          fi
+        done < .review-thread-ids.txt
+
+    - name: Skip obsolete review thread resolution without bot token
+      if: inputs.pr_number != '' && inputs.codex_github_token == '' && (steps.resolve.outputs.mention_type == 'claude' || steps.resolve.outputs.mention_type == 'codex')
+      shell: bash
+      run: |
+        echo "::warning::codex_github_token が未設定のため stale review thread の自動解決をスキップしました"
