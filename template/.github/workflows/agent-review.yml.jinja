@@ -107,7 +107,7 @@ jobs:
 
       - name: Run Agent Review
         if: steps.prep.outputs.should_run == 'true'
-        uses: Javakky/claude-starter/.github/actions/run-claude-review
+        uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
           github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}

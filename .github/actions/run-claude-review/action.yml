@@ -111,13 +111,16 @@ runs:
           .codex-summary.md \
           .codex-last-message.md \
           .review-payload.json \
+          .review-processed.json \
           .review-comments.json \
           .review-comments.ndjson \
           .review-fallback.md \
           .review-fallback-all.md \
           .review-post.err \
           .review-comment.err \
-          .review-meta.env
+          .review-meta.env \
+          .review-valid-lines.json \
+          .review-changed-files.json
 
     - name: Restore trusted nested actions
       if: inputs.trusted_actions_ref != ''
@@ -135,6 +138,7 @@ runs:
         CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
         CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
         CODEX_AUTH: ${{ inputs.codex_auth_json }}
+        TRUSTED_REF: ${{ inputs.trusted_actions_ref }}
       run: |
         HAS_CLAUDE="false"
         HAS_CODEX="false"
@@ -156,6 +160,10 @@ runs:
             echo "::error::mention_type=codex が指定されましたが、codex_code_oauth_token または codex_auth_json がありません"
             exit 1
           fi
+          if [ -z "$TRUSTED_REF" ]; then
+            echo "::error::mention_type=codex には trusted_actions_ref が必須です（.trusted-review-base のチェックアウトに使用）"
+            exit 1
+          fi
           echo "mention_type=codex" >> $GITHUB_OUTPUT
           exit 0
         fi
@@ -163,6 +171,10 @@ runs:
         if [ "$HAS_CLAUDE" = "true" ]; then
           echo "mention_type=claude" >> $GITHUB_OUTPUT
         elif [ "$HAS_CODEX" = "true" ]; then
+          if [ -z "$TRUSTED_REF" ]; then
+            echo "::error::Codex の自動選択には trusted_actions_ref が必須です（.trusted-review-base のチェックアウトに使用）"
+            exit 1
+          fi
           echo "mention_type=codex" >> $GITHUB_OUTPUT
         else
           echo "::error::使用可能なトークンがありません（claude_code_oauth_token または codex_code_oauth_token/codex_auth_json が必要）"
@@ -291,164 +303,105 @@ runs:
 
         export REVIEW_AUTHOR_LOGINS
 
-        if ! python3 <<'PY'
-        import json
-        import os
-        import subprocess
-        from pathlib import Path
+        # GraphQL で review threads を取得（ページネーション対応）
+        QUERY='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved comments(first:10){nodes{author{login}path originalLine body}}}pageInfo{hasNextPage endCursor}}}}}'
 
-        owner = os.environ["REPO_OWNER"]
-        name = os.environ["REPO_NAME"]
-        number = os.environ["PR_NUMBER"]
-        query = """
-        query($owner:String!, $name:String!, $number:Int!, $after:String) {
-          repository(owner:$owner, name:$name) {
-            pullRequest(number:$number) {
-              reviewThreads(first:100, after:$after) {
-                nodes {
-                  id
-                  isResolved
-                  comments(first:10) {
-                    nodes {
-                      author { login }
-                      path
-                      originalLine
-                      body
-                    }
-                  }
-                }
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-              }
-            }
-          }
-        }
-        """
+        echo '[]' > .review-threads-nodes.json
+        CURSOR=""
+        FETCH_OK=true
+        while true; do
+          CURSOR_ARGS=()
+          if [ -n "$CURSOR" ]; then
+            CURSOR_ARGS=(-F "after=$CURSOR")
+          fi
 
-        nodes = []
-        cursor = None
-        while True:
-          cmd = [
-              "gh", "api", "graphql",
-              "-F", f"owner={owner}",
-              "-F", f"name={name}",
-              "-F", f"number={number}",
-              "-f", f"query={query}",
-          ]
-          if cursor:
-              cmd.extend(["-F", f"after={cursor}"])
-          result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-          payload = json.loads(result.stdout)
-          connection = (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {}
-          nodes.extend(connection.get("nodes") or [])
-          page_info = connection.get("pageInfo") or {}
-          if not page_info.get("hasNextPage"):
-              break
-          cursor = page_info.get("endCursor")
-          if not cursor:
-              break
+          if ! RESULT=$(gh api graphql \
+            -F "owner=$REPO_OWNER" \
+            -F "name=$REPO_NAME" \
+            -F "number=$PR_NUMBER" \
+            -f "query=$QUERY" \
+            "${CURSOR_ARGS[@]}" 2>/dev/null); then
+            FETCH_OK=false
+            break
+          fi
 
-        Path(".review-threads.json").write_text(
-            json.dumps({"nodes": nodes}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        PY
-        then
+          # ページのノードを追加
+          echo "$RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes // []' > .review-threads-page.json
+          jq -s '.[0] + .[1]' .review-threads-nodes.json .review-threads-page.json > .review-threads-nodes.tmp.json
+          mv .review-threads-nodes.tmp.json .review-threads-nodes.json
+
+          # ページネーション判定
+          HAS_NEXT=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')
+          if [ "$HAS_NEXT" != "true" ]; then break; fi
+          CURSOR=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""')
+          if [ -z "$CURSOR" ]; then break; fi
+        done
+
+        if [ "$FETCH_OK" != "true" ]; then
           echo "::warning::reviewThreads の取得に失敗したため stale review thread の自動解決をスキップしました"
           exit 0
         fi
 
-        if ! python3 <<'PY' > .review-thread-ids.txt
-        import base64
-        import json
-        import os
-        import re
-        from pathlib import Path
+        jq '{nodes: .}' .review-threads-nodes.json > .review-threads.json
 
-        def normalize(text):
-            return " ".join(str(text or "").strip().split())
+        # stale thread の照合（jq で marker をデコードし、active findings と比較）
+        if ! jq -r --arg run_id "$REVIEW_RUN_ID" \
+             --arg head_sha "$REVIEW_HEAD_SHA" \
+             --arg authors "$REVIEW_AUTHOR_LOGINS" \
+             --slurpfile findings .codex-review-findings.json \
+        '
+        def normalize: tostring | gsub("\\s+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "");
 
-        def marker_from_body(body):
-            match = re.search(r"<!--\s*codex-review-key:([A-Za-z0-9+/=]+)\s*-->", str(body or ""))
-            if not match:
-                return None
-            try:
-                payload = json.loads(base64.b64decode(match.group(1)).decode("utf-8"))
-            except Exception:
-                return None
-            path = str(payload.get("path", "")).strip()
-            title = normalize(payload.get("title", ""))
-            try:
-                line = int(payload.get("line"))
-            except (TypeError, ValueError):
-                return None
-            if not path or not title or line <= 0:
-                return None
-            return (path, line, title)
+        def marker_from_body:
+          . // "" |
+          (capture("<!--\\s*codex-review-key:(?<key>[A-Za-z0-9+/=]+)\\s*-->") | .key) // null |
+          if . == null then null
+          else
+            (try (. | @base64d | fromjson) catch null) |
+            if . == null then null
+            else
+              (.path // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $p |
+              (.title // "" | normalize) as $t |
+              (try (.line | tonumber) catch null) as $l |
+              if $p != "" and $t != "" and $l != null and $l > 0 then
+                "\($p)|\($l)|\($t)"
+              else null end
+            end
+          end;
 
-        findings_payload = json.loads(Path(".codex-review-findings.json").read_text(encoding="utf-8"))
-        threads_data = json.loads(Path(".review-threads.json").read_text(encoding="utf-8"))
-        expected_run_id = os.environ["REVIEW_RUN_ID"]
-        expected_head_sha = os.environ["REVIEW_HEAD_SHA"]
-        allowed_authors = {
-            normalize(login)
-            for login in os.environ.get("REVIEW_AUTHOR_LOGINS", "").split(",")
-            if normalize(login)
-        }
+        # Freshness 検証
+        $findings[0] as $f |
+        ($f.generated_by_run_id // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $gen_run |
+        ($f.generated_for_head_sha // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $gen_sha |
+        (if $gen_run != $run_id then error("run mismatch during stale thread resolution") else . end) |
+        (if $gen_sha != $head_sha then error("head SHA mismatch during stale thread resolution") else . end) |
 
-        if not isinstance(findings_payload, dict):
-            raise SystemExit("Structured review payload must be a JSON object for stale thread resolution")
+        # Active findings set
+        ([$f.findings // [] | .[] | select(type == "object") |
+          select((.severity // "" | ascii_downcase) != "low") |
+          (.path // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $p |
+          (.title // "" | normalize) as $t |
+          (try (.line | tonumber) catch null) as $l |
+          select($p != "" and $t != "" and $l != null and $l > 0) |
+          "\($p)|\($l)|\($t)"
+        ] | map({(.): true}) | add // {}) as $active_set |
 
-        generated_by_run_id = str(findings_payload.get("generated_by_run_id", "")).strip()
-        generated_for_head_sha = str(findings_payload.get("generated_for_head_sha", "")).strip()
-        if generated_by_run_id != expected_run_id:
-            raise SystemExit(
-                f"Structured review payload run mismatch during stale thread resolution: "
-                f"expected {expected_run_id}, got {generated_by_run_id or '<empty>'}"
-            )
-        if generated_for_head_sha != expected_head_sha:
-            raise SystemExit(
-                f"Structured review payload head SHA mismatch during stale thread resolution: "
-                f"expected {expected_head_sha}, got {generated_for_head_sha or '<empty>'}"
-            )
+        # Allowed authors set
+        ($authors | split(",") | map(normalize) | map(select(. != "")) | map({(.): true}) | add // {}) as $allowed |
 
-        active = set()
-        for item in findings_payload.get("findings", []) or []:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("severity", "")).lower() == "low":
-                continue
-            path = str(item.get("path", "")).strip()
-            title = normalize(item.get("title", ""))
-            try:
-                line = int(item.get("line"))
-            except (TypeError, ValueError):
-                continue
-            if path and title and line > 0:
-                active.add((path, line, title))
-
-        nodes = threads_data.get("nodes") or []
-        for node in nodes:
-            if node.get("isResolved"):
-                continue
-            comments = ((node.get("comments") or {}).get("nodes") or [])
-            if not comments:
-                continue
-            first = comments[0]
-            author = normalize(((first.get("author") or {}).get("login")) or "")
-            if author not in allowed_authors:
-                continue
-            marker = marker_from_body(first.get("body", ""))
-            if marker is None:
-                continue
-            candidate = marker
-            if candidate in active:
-                continue
-            print(node["id"])
-        PY
-        then
+        # stale thread ID を出力
+        [.nodes[] | select(.isResolved | not) |
+          (.comments.nodes // []) as $comments |
+          select(($comments | length) > 0) |
+          $comments[0] as $first |
+          ($first.author.login // "" | normalize) as $author |
+          select($allowed[$author]) |
+          ($first.body | marker_from_body) as $marker |
+          select($marker != null) |
+          select($active_set[$marker] | not) |
+          .id
+        ] | .[]
+        ' .review-threads.json > .review-thread-ids.txt; then
           echo "::warning::stale review thread の照合に失敗したため自動解決をスキップしました"
           exit 0
         fi
@@ -483,6 +436,11 @@ runs:
           .review-post.err \
           .review-comment.err \
           .review-meta.env \
+          .review-processed.json \
+          .review-valid-lines.json \
+          .review-changed-files.json \
           .review-threads.json \
+          .review-threads-nodes.json \
+          .review-threads-page.json \
           .review-thread-ids.txt \
           .review-thread-resolve.err

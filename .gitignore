@@ -21,3 +21,8 @@
 .review-threads.json
 .review-thread-ids.txt
 .review-thread-resolve.err
+.review-processed.json
+.review-valid-lines.json
+.review-changed-files.json
+.review-threads-nodes.json
+.review-threads-page.json
