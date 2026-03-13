@@ -17,7 +17,9 @@ fi
 # --- PR 変更ファイル一覧を JSONL で取得 ---
 PR_FILES_JSONL=.review-pr-files.jsonl
 if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
-     --paginate --jq '.[]' > "$PR_FILES_JSONL" 2>/dev/null; then
+     --paginate --jq '.[]' > "$PR_FILES_JSONL" 2>.review-pr-files.err; then
+  ERR_DETAIL=$(tr '\n' ' ' < .review-pr-files.err | sed 's/[[:space:]]\+/ /g')
+  echo "::warning::PR ファイル一覧の取得に失敗しました: ${ERR_DETAIL}"
   : > "$PR_FILES_JSONL"
 fi
 
@@ -102,8 +104,8 @@ def review_marker($path; $line; $title):
 # marker を保護しつつ body を truncate する
 def protect_body($marker):
   (65000 - ($marker | length) - 1) as $avail |
-  if $avail < 0 then error("review marker is longer than the supported comment length") else . end |
-  "\(.[:$avail])\n\($marker)";
+  (if $avail < 0 then 0 else $avail end) as $safe_avail |
+  "\(.[:$safe_avail])\n\($marker)";
 
 # 最寄りの有効行を検索
 def nearest_valid($path; $line):
@@ -111,24 +113,24 @@ def nearest_valid($path; $line):
   if length == 0 then null
   else map({v: ., d: ((. - $line) | abs)}) | sort_by(.d) | .[0].v end;
 
-# is_blocking のパース
+# is_blocking のパース（不正な値は true にフォールバック）
 def parse_blocking:
   if type == "boolean" then .
   elif . == null then true
   else (tostring | ascii_downcase) as $s |
     if ($s == "true" or $s == "1" or $s == "yes") then true
     elif ($s == "false" or $s == "0" or $s == "no") then false
-    else error("is_blocking must be boolean-compatible: \(.)") end
+    else true end
   end;
 
-# tracking_issue のバリデーション
+# tracking_issue のバリデーション（不正な値は空文字を返す）
 def validate_tracking($blocking):
   (. // "" | tostring | trim) as $v |
   if $blocking then $v
-  elif ($v | length) == 0 then error("Non-blocking finding must include tracking_issue")
+  elif ($v | length) == 0 then ""
   elif ($v | test("^#?[0-9]+$")) then $v
   elif ($v | test("^https://github\\.com/[^/]+/[^/]+/issues/[0-9]+$")) then $v
-  else error("tracking_issue must be an issue number or GitHub issue URL: \(.)") end;
+  else "" end;
 
 # --- メイン処理 ---
 (.summary // "" | tostring | trim) as $summary |
@@ -137,34 +139,53 @@ def validate_tracking($blocking):
 reduce ((.findings // [])[] | select(type == "object")) as $raw (
   {comments: [], fallback: [], max_sev: 0, max_bsev: 0, seen: {}};
 
-  # 必須キーの確認
+  # 必須キーの確認（不正な finding はスキップして fallback に分類）
   (["path","line","severity","is_blocking","tracking_issue","title","evidence","suggestion","impact"]
    | map(select($raw | has(.) | not))) as $miss |
-  (if ($miss | length) > 0 then error("Finding missing required keys: \($miss | join(", "))") else . end) |
+  (if ($miss | length) > 0 then
+    .fallback += ["- [skip:missing_keys] keys=\($miss | join(", "))\n\($raw | tostring | .[:500])"]
+  else . end) |
+  if ($miss | length) > 0 then . else
 
   ($raw.severity // "low" | tostring | ascii_downcase) as $sev |
-  (if (sev_rank | has($sev) | not) then error("Invalid finding severity: \($sev)") else . end) |
-  ($raw.is_blocking | parse_blocking) as $blocking |
-  ($raw.tracking_issue | validate_tracking($blocking)) |
+  (if (sev_rank | has($sev) | not) then
+    .fallback += ["- [skip:invalid_severity] severity=\($sev)\n\($raw | tostring | .[:500])"]
+  else . end) |
+  if (sev_rank | has($sev) | not) then . else
+
+  (try ($raw.is_blocking | parse_blocking) catch false) as $blocking |
+  (try ($raw.tracking_issue | validate_tracking($blocking)) catch "") |
   (sev_rank[$sev]) as $rank |
   .max_sev = ([.max_sev, $rank] | max) |
   (if $blocking then .max_bsev = ([.max_bsev, $rank] | max) else . end) |
 
   ($raw.path // "" | tostring | trim) as $path |
-  (if ($path | length) == 0 then error("Finding path must be non-empty") else . end) |
+  (if ($path | length) == 0 then
+    .fallback += ["- [skip:empty_path] \($raw.title // "" | tostring | .[:200])"]
+  else . end) |
+  if ($path | length) == 0 then . else
 
   # 非空フィールドの検証
   (["title","evidence","suggestion","impact"]
    | map(select(($raw[.] // "" | tostring | trim | length) == 0))) as $empty |
-  (if ($empty | length) > 0 then error("Finding field \"\($empty[0])\" must be non-empty") else . end) |
+  (if ($empty | length) > 0 then
+    .fallback += ["- [skip:empty_field] field=\($empty[0]) path=\($path)\n\($raw | tostring | .[:500])"]
+  else . end) |
+  if ($empty | length) > 0 then . else
 
-  (try ($raw.line | if type == "number" then . else tonumber end)
-   catch error("Finding line must be integer-compatible: \($raw.line)")) as $req |
+  (try ($raw.line | if type == "number" then . else tonumber end) catch null) as $req |
+  (if $req == null then
+    .fallback += ["- [skip:invalid_line] line=\($raw.line) path=\($path)"]
+  else . end) |
+  if $req == null then . else
+
   ($raw | render_body) as $body |
 
   if $sev == "low" then .
-  elif ($changed_set[$path] | not) then error("Finding path outside PR diff: \($path)")
-  elif $req <= 0 then error("Finding line must be positive: \($req)")
+  elif ($changed_set[$path] | not) then
+    .fallback += ["- [fallback:invalid_path] `\($path):\($req)`\n\($body)"]
+  elif $req <= 0 then
+    .fallback += ["- [fallback:invalid_line] `\($path):\($req)`\n\($body)"]
   else
     ("\($path):\($req)") as $loc |
     if .seen[$loc] then
@@ -191,6 +212,11 @@ reduce ((.findings // [])[] | select(type == "object")) as $raw (
       end
     end
   end
+  end # $req null check
+  end # empty field check
+  end # empty path check
+  end # invalid severity check
+  end # missing keys check
 ) |
 
 # verdict 決定: blocking な high 以上 → REQUEST_CHANGES、medium 以上 → COMMENT、それ以外 → APPROVE

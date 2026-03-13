@@ -477,7 +477,11 @@ runs:
         fi
 
         # PR 変更ファイル一覧を取得
-        PR_FILES_JSON=$(gh pr view "$REVIEW_PR_NUMBER" --json files 2>/dev/null || echo '{"files":[]}')
+        if ! PR_FILES_JSON=$(gh pr view "$REVIEW_PR_NUMBER" --json files 2>.review-pr-files.err); then
+          ERR_DETAIL=$(tr '\n' ' ' < .review-pr-files.err | sed 's/[[:space:]]\+/ /g')
+          echo "::warning::PR ファイル一覧の取得に失敗しました: ${ERR_DETAIL}"
+          PR_FILES_JSON='{"files":[]}'
+        fi
         COMMIT_ID=$(git rev-parse HEAD)
 
         # Findings を jq で解析して review payload を生成
