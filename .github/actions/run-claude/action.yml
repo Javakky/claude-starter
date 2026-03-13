@@ -118,13 +118,33 @@ runs:
       env:
         CUSTOM_TOOLS: ${{ inputs.allowed_tools }}
       run: |
-        TOOLS=""
+        # デフォルトで許可するツール（カンマ区切りで結合）
+        DEFAULT_TOOLS=(
+          'Bash(gh pr view *)'
+          'Bash(gh api repos/*/pulls/*/comments*)'
+          'Bash(gh api repos/*/issues/*/comments*)'
+        )
+
+        # カンマ区切りでツールを結合
+        TOOL_LIST=""
+        for tool in "${DEFAULT_TOOLS[@]}"; do
+          if [ -n "$TOOL_LIST" ]; then
+            TOOL_LIST="$TOOL_LIST,$tool"
+          else
+            TOOL_LIST="$tool"
+          fi
+        done
+
+        # カスタムツールを追加
         if [ -n "$CUSTOM_TOOLS" ]; then
           while IFS= read -r tool; do
-            [ -n "$tool" ] && TOOLS="$TOOLS --allowedTools \"$tool\""
+            if [ -n "$tool" ]; then
+              TOOL_LIST="$TOOL_LIST,$tool"
+            fi
           done <<< "$CUSTOM_TOOLS"
         fi
-        echo "tools=$TOOLS" >> $GITHUB_OUTPUT
+
+        echo "tools=--allowedTools \"$TOOL_LIST\"" >> $GITHUB_OUTPUT
 
     # App mode: claude-code-action の GitHub App トークンを使用。
     # App トークンで push すると後続ワークフロー（レビュー等）がトリガーされる。
