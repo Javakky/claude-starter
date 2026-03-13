@@ -146,7 +146,7 @@ runs:
         claude_args: |
           --model ${{ steps.opts.outputs.model }}
           --max-turns ${{ steps.opts.outputs.max_turns }}
-          --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+          --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr view *),Bash(gh api repos/*/pulls/*/comments*),Bash(gh api repos/*/issues/*/comments*)"
 
     - name: Build Codex review prompt
       if: steps.resolve.outputs.mention_type == 'codex'
