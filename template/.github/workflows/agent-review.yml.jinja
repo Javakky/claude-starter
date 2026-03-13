@@ -11,6 +11,8 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  # actions: write は進行中の review ワークフローをキャンセルするために必要
+  # （実装タスク開始時にレビューを停止する cancel-claude-runs action が使用）
   actions: write
   id-token: write
 
@@ -29,7 +31,8 @@ jobs:
         id: trusted_ref
         env:
           GH_TOKEN: ${{ github.token }}
-          IS_SELF_TRUSTED_REPO: ${{ github.repository == 'kakutabi/claude-starter' || github.repository == 'Javakky/claude-starter' }}
+          # 配布先リポジトリでは常に false（上流リポジトリの判定はハードコードしない）
+          IS_SELF_TRUSTED_REPO: "false"
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         run: |
           set -euo pipefail
