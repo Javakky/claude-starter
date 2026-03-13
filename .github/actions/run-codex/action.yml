@@ -43,6 +43,10 @@ inputs:
     description: "Codex 実行後にコード変更を自動コミット・プッシュするか"
     required: false
     default: "true"
+  fail_on_error:
+    description: "Codex 実行が失敗した場合にアクション全体を失敗させるか"
+    required: false
+    default: "true"
   create_branch:
     description: "実行前に新しいブランチを作成するか（Issue 起点の実装で使用）"
     required: false
@@ -69,6 +73,14 @@ inputs:
     default: ""
   app_private_key:
     description: "GitHub App の秘密鍵（PEM 形式）"
+    required: false
+    default: ""
+  review_mode:
+    description: "レビュー実行モード。true の場合は行コメント投稿を有効化"
+    required: false
+    default: "false"
+  review_pr_number:
+    description: "レビュー投稿対象の PR 番号（review_mode=true で使用）"
     required: false
     default: ""
 
@@ -225,6 +237,7 @@ runs:
         ISSUE_NUMBER: ${{ inputs.issue_number }}
         ORIGINAL_PROMPT: ${{ inputs.prompt }}
         AUTO_COMMIT: ${{ inputs.auto_commit }}
+        REVIEW_MODE: ${{ inputs.review_mode }}
       run: |
         CONTEXT=""
 
@@ -272,6 +285,10 @@ runs:
 
         # 作業サマリー指示を追加
         FULL_PROMPT=$(printf '%s\n\n---\n【サマリー出力】\n作業完了後、結果のサマリーを `.codex-summary.md` に Markdown 形式で書き出してください。' "$FULL_PROMPT")
+
+        if [ "$REVIEW_MODE" = "true" ]; then
+          FULL_PROMPT=$(printf '%s\n\n---\n【レビュー出力】\nレビュー結果は `.codex-review-findings.json` に保存してください。形式は以下に従ってください。\n{\n  "summary": "全体サマリー",\n  "findings": [\n    {\n      "path": "ファイルパス",\n      "line": 123,\n      "severity": "low|medium|high|critical",\n      "title": "問題の要約",\n      "evidence": "根拠",\n      "suggestion": "修正案",\n      "impact": "影響範囲"\n    }\n  ]\n}\nlow は会話サマリー向け、medium 以上は行コメント対象です。' "$FULL_PROMPT")
+        fi
 
         EOF_MARKER="EOF_CONTEXT_$(date +%s%N)"
         echo "prompt<<${EOF_MARKER}" >> $GITHUB_OUTPUT
@@ -349,11 +366,21 @@ runs:
         CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
         CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
       run: |
+        AUTH_DIR="$HOME/.codex"
+        mkdir -p "$AUTH_DIR"
+        rm -f "$AUTH_DIR/auth.json"
+
         if [ -n "$CODEX_AUTH_JSON" ]; then
           # Base64 デコードして auth.json を配置
-          AUTH_DIR="$HOME/.codex"
-          mkdir -p "$AUTH_DIR"
-          echo "$CODEX_AUTH_JSON" | base64 -d > "$AUTH_DIR/auth.json"
+          AUTH_TMP=$(mktemp)
+          if ! printf '%s' "$CODEX_AUTH_JSON" | base64 --decode > "$AUTH_TMP" 2>/dev/null \
+            && ! printf '%s' "$CODEX_AUTH_JSON" | base64 -d > "$AUTH_TMP" 2>/dev/null \
+            && ! printf '%s' "$CODEX_AUTH_JSON" | base64 -D > "$AUTH_TMP" 2>/dev/null; then
+            rm -f "$AUTH_TMP"
+            echo "::error::codex_auth_json の Base64 デコードに失敗しました"
+            exit 1
+          fi
+          mv "$AUTH_TMP" "$AUTH_DIR/auth.json"
           chmod 600 "$AUTH_DIR/auth.json"
           echo "auth_method=auth_json" >> $GITHUB_OUTPUT
           echo "Codex 認証: auth.json を使用"
@@ -372,6 +399,7 @@ runs:
         GH_TOKEN: ${{ steps.app_token.outputs.token || inputs.bot_github_token || inputs.github_token }}
         CODEX_PROMPT: ${{ steps.context.outputs.prompt }}
         CODEX_MODEL: ${{ steps.codex_opts.outputs.model }}
+        FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
       run: |
         # codex exec: CI/スクリプト向け非対話モード
         # 参考: https://developers.openai.com/codex/cli/reference/
@@ -406,6 +434,9 @@ runs:
 
         if [ $CODEX_EXIT_CODE -ne 0 ]; then
           echo "::warning::Codex がエラーコード ${CODEX_EXIT_CODE} で終了しました"
+          if [ "$FAIL_ON_ERROR" = "true" ]; then
+            exit $CODEX_EXIT_CODE
+          fi
         fi
 
     # 9. Codex 出力の読み込み
@@ -429,6 +460,149 @@ runs:
         echo "response<<${EOF_MARKER}" >> $GITHUB_OUTPUT
         echo "$RESPONSE" >> $GITHUB_OUTPUT
         echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
+
+    - name: Publish PR line review
+      if: inputs.review_mode == 'true' && inputs.review_pr_number != '' && (steps.app_token.outputs.token != '' || inputs.bot_github_token != '' || inputs.github_token != '')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token || inputs.bot_github_token || inputs.github_token }}
+        REVIEW_PR_NUMBER: ${{ inputs.review_pr_number }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f .codex-review-findings.json ]; then
+          echo "⚠️ \`.codex-review-findings.json\` が見つからないため、行コメント投稿をスキップします。" > .review-fallback.md
+          gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
+          exit 0
+        fi
+
+        # PR 変更ファイル一覧を取得
+        if ! PR_FILES_JSON=$(gh pr view "$REVIEW_PR_NUMBER" --json files 2>.review-pr-files.err); then
+          ERR_DETAIL=$(tr '\n' ' ' < .review-pr-files.err | sed 's/[[:space:]]\+/ /g')
+          echo "::warning::PR ファイル一覧の取得に失敗しました: ${ERR_DETAIL}"
+          PR_FILES_JSON='{"files":[]}'
+        fi
+        COMMIT_ID=$(git rev-parse HEAD)
+
+        # Findings を jq で解析して review payload を生成
+        # - APPROVE verdict 対応（全指摘 low or なし → APPROVE）
+        # - codex-review-key marker 埋め込み（stale thread 解決用）
+        # - marker 保護付き truncation
+        # - (path, line) 重複チェック
+        jq --arg commit_id "$COMMIT_ID" \
+           --argjson pr_files "$PR_FILES_JSON" \
+        '
+        def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
+        def abs: if . < 0 then (- .) else . end;
+        def sev_rank: {"low": 0, "medium": 1, "high": 2, "critical": 3};
+
+        def render_body:
+          ["問題: \(.title // "" | tostring | trim)",
+           "根拠: \(.evidence // "" | tostring | trim)",
+           "修正案: \(.suggestion // "" | tostring | trim)",
+           "影響: \(.impact // "" | tostring | trim)"] | join("\n");
+
+        def review_marker($path; $line; $title):
+          ({path: $path, line: $line, title: ($title | tostring | gsub("\\s+"; " ") | trim)}
+          | tojson | @base64)
+          | "<!-- codex-review-key:\(.) -->";
+
+        def protect_body($marker):
+          (65000 - ($marker | length) - 1) as $avail |
+          "\(.[:$avail])\n\($marker)";
+
+        (.summary // "" | tostring | trim) as $summary |
+        ([$pr_files.files // [] | .[] | .path // empty] | map({(.): true}) | add // {}) as $changed |
+
+        reduce ((.findings // [])[] | select(type == "object")) as $item (
+          {comments: [], fallback: [], highest: 0, highest_blocking: 0, seen: {}};
+
+          ($item.severity // "low" | tostring | ascii_downcase) as $sev |
+          ((sev_rank[$sev]) // 0) as $rank |
+          .highest = ([.highest, $rank] | max) |
+          # is_blocking のパース
+          (($item.is_blocking // true) | if type == "boolean" then . elif . == null then true
+           else (tostring | ascii_downcase) as $s |
+             if ($s == "true" or $s == "1" or $s == "yes") then true else false end
+           end) as $blocking |
+          (if $blocking then .highest_blocking = ([.highest_blocking, $rank] | max) else . end) |
+          ($item.path // "" | tostring | trim) as $p |
+          ($item.line // 0) as $line |
+          ($item | render_body) as $text |
+
+          if $sev == "low" then
+            .fallback += ["- [low] `\($p):\($line)` \($item.title // "")"]
+          elif ($p | length) == 0 or ($changed[$p] | not) then
+            .fallback += ["- [fallback:invalid_path] `\($p):\($line)`\n\($text)"]
+          elif ($line | type) != "number" or $line <= 0 then
+            .fallback += ["- [fallback:invalid_line] `\($p):\($line)`\n\($text)"]
+          else
+            ("\($p):\($line)") as $loc |
+            if .seen[$loc] then
+              .fallback += ["- [fallback:duplicate] `\($p):\($line)`\n\($text)"]
+            else
+              .seen[$loc] = true |
+              review_marker($p; $line; $item.title) as $mk |
+              ($text | protect_body($mk)) as $full |
+              .comments += [{path: $p, line: $line, side: "RIGHT", body: $full}]
+            end
+          end
+        ) |
+
+        (if .highest_blocking >= (sev_rank["high"]) then "REQUEST_CHANGES"
+         elif .highest >= (sev_rank["medium"]) then "COMMENT"
+         else "APPROVE" end) as $evt |
+
+        {
+          payload: ({event: $evt, body: (if ($summary | length) > 0 then $summary else "AI review findings" end), comments: .comments}
+            + if ($commit_id | length) > 0 then {commit_id: $commit_id} else {} end),
+          fallback: .fallback,
+          comments_count: (.comments | length),
+          fallback_count: (.fallback | length),
+          event: $evt
+        }
+        ' .codex-review-findings.json > .review-processed.json
+
+        # review payload 出力
+        jq '.payload' .review-processed.json > .review-payload.json
+        COMMENTS_COUNT=$(jq -r '.comments_count' .review-processed.json)
+        FALLBACK_COUNT=$(jq -r '.fallback_count' .review-processed.json)
+
+        # fallback コメント
+        if [ "$FALLBACK_COUNT" -gt 0 ]; then
+          {
+            printf '⚠️ 一部の指摘は行コメント化できなかったため conversation にフォールバックしました。\n\n'
+            jq -r '.fallback[]' .review-processed.json
+          } > .review-fallback.md
+        else
+          : > .review-fallback.md
+        fi
+
+        # meta 出力
+        REVIEW_EVENT=$(jq -r '.event' .review-processed.json)
+        printf 'COMMENTS_COUNT=%s\nFALLBACK_COUNT=%s\nREVIEW_EVENT=%s\n' \
+          "$COMMENTS_COUNT" "$FALLBACK_COUNT" "$REVIEW_EVENT" > .review-meta.env
+
+        # review 投稿
+        if [ "${COMMENTS_COUNT:-0}" -gt 0 ]; then
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$REVIEW_PR_NUMBER/reviews" -X POST --input .review-payload.json >/dev/null 2>.review-post.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-post.err | sed 's/[[:space:]]\+/ /g')
+            {
+              echo "⚠️ review API 投稿に失敗したため conversation にフォールバックしました。"
+              echo
+              echo "reason: api_error"
+              echo "detail: ${ERR_MSG}"
+              echo
+              cat .review-fallback.md 2>/dev/null || true
+            } > .review-fallback-all.md
+            gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback-all.md >/dev/null || true
+            exit 0
+          fi
+        fi
+
+        if [ "${FALLBACK_COUNT:-0}" -gt 0 ] && [ -s .review-fallback.md ]; then
+          gh pr comment "$REVIEW_PR_NUMBER" --body-file .review-fallback.md >/dev/null || true
+        fi
 
     # 10. Codex 作業用ファイルのクリーンアップ
     - name: Cleanup Codex work files
@@ -490,7 +664,7 @@ runs:
 
         # 一時ファイルを除外してステージング
         git add -A
-        git reset -- .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-issues.json 2>/dev/null || true
+        git reset -- .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-issues.json .codex-review-findings.json .review-meta.env .review-payload.json .review-fallback.md .review-fallback-all.md .review-post.err 2>/dev/null || true
 
         # コミット（Bot ユーザーの正しいメールで Co-authored-by を設定）
         COMMIT_FULL_MSG=$(printf '%s\n\nCo-authored-by%s %s <%s>' "$COMMIT_MSG" ":" "$BOT_LOGIN" "$GIT_EMAIL")
@@ -505,7 +679,7 @@ runs:
         # App トークンまたは bot_github_token が利用可能な場合、push 時の認証を差し替える
         if [ -n "$PUSH_TOKEN" ]; then
           echo "::add-mask::${PUSH_TOKEN}"
-          AUTH_BASE64=$(echo -n "x-access-token:${PUSH_TOKEN}" | base64 -w 0)
+          AUTH_BASE64=$(printf '%s' "x-access-token:${PUSH_TOKEN}" | base64 | tr -d '\n')
           echo "::add-mask::${AUTH_BASE64}"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH_BASE64}"
           echo "push 認証を差し替えました（後続ワークフローのトリガーが有効化されます）"
@@ -620,4 +794,4 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md
+        rm -f .codex-output.log .codex-commit-msg .codex-summary.md .codex-last-message.md .codex-review-findings.json .review-meta.env .review-payload.json .review-processed.json .review-fallback.md .review-fallback-all.md .review-post.err

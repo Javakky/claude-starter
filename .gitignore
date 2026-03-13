@@ -6,3 +6,23 @@
 .codex-last-message.md
 .codex-issues.json
 .codex-output.log
+
+# レビュー一時ファイル
+.codex-review-findings.json
+.review-payload.json
+.review-comments.json
+.review-comments.ndjson
+.review-fallback.md
+.review-fallback-all.md
+.review-meta.env
+.review-post.err
+.review-comment.err
+.review-pr-files.jsonl
+.review-threads.json
+.review-thread-ids.txt
+.review-thread-resolve.err
+.review-processed.json
+.review-valid-lines.json
+.review-changed-files.json
+.review-threads-nodes.json
+.review-threads-page.json

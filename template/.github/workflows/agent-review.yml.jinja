@@ -1,5 +1,5 @@
-{% raw %}name: Agent Review
-run-name: "agent-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
+name: Agent Review
+{% raw %}run-name: "agent-review pr #${{ github.event.pull_request.number || github.event.issue.number }}"
 
 on:
   pull_request:
@@ -11,6 +11,8 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  # actions: write は進行中の review ワークフローをキャンセルするために必要
+  # （実装タスク開始時にレビューを停止する cancel-claude-runs action が使用）
   actions: write
   id-token: write
 
@@ -25,43 +27,58 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      # ローカル actions を使うための checkout
-      - name: Checkout repository to access local actions
+      - name: Resolve trusted workflow ref
+        id: trusted_ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 配布先リポジトリでは常に false（上流リポジトリの判定はハードコードしない）
+          IS_SELF_TRUSTED_REPO: "false"
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ "$IS_SELF_TRUSTED_REPO" = "true" ]; then
+            DEFAULT_BRANCH=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+            TRUSTED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
+          elif [ -n "$PR_BASE_SHA" ]; then
+            TRUSTED_SHA="$PR_BASE_SHA"
+          else
+            TRUSTED_SHA="$GITHUB_SHA"
+          fi
+
+          echo "sha=$TRUSTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted workflow actions
+        id: trusted_checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.trusted_ref.outputs.sha }}
           fetch-depth: 0
+          path: .trusted-base
 
       - name: Prepare context
         id: prep
-        uses: Javakky/claude-starter/.github/actions/prepare-claude-context{% endraw %}{{ ref }}{% raw %}
+        uses: ./.trusted-base/.github/actions/prepare-claude-context
         with:
           mode: "review"
-          # implement-running gate 用（implement workflow ファイル名に合わせる）
           impl_workflow_id: agent.yml
-
-          # pr-sync skip rules
           skip_commit_prefixes: "docs:,style:,chore:,wip:"
           allow_final_sync_during_impl: "true"
-          # senderがBotじゃないケースに備えるなら marker を入れる（運用でエージェント最終commitに付ける）
           final_sync_commit_marker: "[agent-final]"
-
           allowed_comment_permissions: "admin,maintain,write"
           max_workflow_runs_to_scan: "50"
 
-      # prepare が skip の場合はここで終了
       - name: Stop early if skipped
         if: steps.prep.outputs.should_run != 'true'
         run: |
           echo "Skipping review: ${{ steps.prep.outputs.reason }}"
 
-      # Review は PR context が必須（pull_request or PR conversation comment）
       - name: Fail fast if PR context missing
         if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.pr_number == ''
         run: |
           echo "PR context is required for review but pr_number is empty."
           exit 1
 
-      # レビュー対象の head_sha/head_ref を checkout（正しい差分をレビューするため）
       - name: Checkout PR head
         if: steps.prep.outputs.should_run == 'true'
         uses: actions/checkout@v4
@@ -69,21 +86,42 @@ jobs:
           ref: ${{ steps.prep.outputs.head_sha }}
           fetch-depth: 0
 
+      - name: Configure git URL rewriting for fork PRs
+        if: steps.prep.outputs.should_run == 'true' && steps.prep.outputs.fork_clone_url != ''
+        env:
+          FORK_URL: ${{ steps.prep.outputs.fork_clone_url }}
+        run: |
+          ORIGIN_URL=$(git remote get-url origin)
+          ORIGIN_BASE="${ORIGIN_URL%.git}"
+          FORK_BASE="${FORK_URL%.git}"
+          git config url."${FORK_BASE}".insteadOf "${ORIGIN_BASE}"
+          git config url."${FORK_BASE}.git".insteadOf "${ORIGIN_BASE}.git"
+
+      - name: Restore trusted workflow actions
+        if: steps.prep.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.trusted_ref.outputs.sha }}
+          fetch-depth: 0
+          path: .trusted-base
+
       - name: Run Agent Review
         if: steps.prep.outputs.should_run == 'true'
         uses: Javakky/claude-starter/.github/actions/run-claude-review{% endraw %}{{ ref }}{% raw %}
         with:
           github_token: ${{ github.token }}
           comment_body: ${{ steps.prep.outputs.comment_body }}
-          # mention_type: 空または auto でエージェント選択、トークンなしでフォールバック
           mention_type: ${{ steps.prep.outputs.mention_type }}
           issue_number: ${{ steps.prep.outputs.issue_number }}
           pr_number: ${{ steps.prep.outputs.pr_number }}
+          trusted_actions_ref: ${{ steps.trusted_ref.outputs.sha }}
+          head_sha: ${{ steps.prep.outputs.head_sha }}
           head_ref: ${{ steps.prep.outputs.head_ref }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           codex_code_oauth_token: ${{ secrets.CODEX_CODE_OAUTH_TOKEN }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           codex_github_token: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          allowed_review_authors: ${{ vars.CODEX_REVIEW_AUTHOR_LOGINS }}
 {% endraw %}          model: '{{ claude_model }}'
           max_turns: '{{ review_max_turns }}'
 {% raw %}          # prompt: '/review'

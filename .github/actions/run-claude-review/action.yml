@@ -21,6 +21,10 @@ inputs:
     description: "Codex ボットユーザー専用の GitHub トークン（Codex が gh CLI で使用）。未指定時は github_token にフォールバック"
     required: false
     default: ""
+  allowed_review_authors:
+    description: "stale review thread 自動解決の対象とする review author login の追加 allowlist（カンマ区切り）"
+    required: false
+    default: ""
   mention_type:
     description: "メンションの種類（claude, codex, auto）。auto の場合は Claude 優先でトークンの有無によりフォールバック"
     required: false
@@ -31,6 +35,14 @@ inputs:
     default: ""
   pr_number:
     description: "PR 番号（Codex の PR コンテキスト取得に使用）"
+    required: false
+    default: ""
+  trusted_actions_ref:
+    description: "信頼済み action 定義を checkout する ref"
+    required: false
+    default: ""
+  head_sha:
+    description: "PR の head SHA（成果物の freshness 検証に使用）"
     required: false
     default: ""
   head_ref:
@@ -61,7 +73,63 @@ inputs:
 runs:
   using: "composite"
   steps:
-    # mention_type の解決（auto の場合は Claude 優先でフォールバック）
+    - name: Build normalized review prompt
+      id: review_prompt
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+      run: |
+        # レビュープロンプトを docs/agent/REVIEW_PROMPT.md から読み込む（存在しない場合はエラー）
+        PROMPT_FILE="docs/agent/REVIEW_PROMPT.md"
+        if [ ! -f "$PROMPT_FILE" ]; then
+          echo "::error::レビュープロンプトファイルが見つかりません: $PROMPT_FILE"
+          exit 1
+        fi
+        DEFAULT_REVIEW_PROMPT=$(cat "$PROMPT_FILE")
+        # ランタイムプレースホルダーを置換
+        DEFAULT_REVIEW_PROMPT=${DEFAULT_REVIEW_PROMPT//\{\{REVIEW_RUN_ID\}\}/$REVIEW_RUN_ID}
+        DEFAULT_REVIEW_PROMPT=${DEFAULT_REVIEW_PROMPT//\{\{REVIEW_HEAD_SHA\}\}/$REVIEW_HEAD_SHA}
+
+        if [ -z "$PROMPT" ] || [ "$PROMPT" = "/review" ]; then
+          FINAL_PROMPT="$DEFAULT_REVIEW_PROMPT"
+        else
+          FINAL_PROMPT=$(printf '%s\n\n---\n%s' "$PROMPT" "$DEFAULT_REVIEW_PROMPT")
+        fi
+
+        EOF_MARKER="EOF_REVIEW_PROMPT_$(date +%s%N)"
+        echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
+        echo "$FINAL_PROMPT" >> $GITHUB_OUTPUT
+        echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
+
+    - name: Remove stale review artifacts
+      shell: bash
+      run: |
+        rm -f \
+          .codex-review-findings.json \
+          .codex-summary.md \
+          .codex-last-message.md \
+          .review-payload.json \
+          .review-processed.json \
+          .review-comments.json \
+          .review-comments.ndjson \
+          .review-fallback.md \
+          .review-fallback-all.md \
+          .review-post.err \
+          .review-comment.err \
+          .review-meta.env \
+          .review-valid-lines.json \
+          .review-changed-files.json
+
+    - name: Restore trusted nested actions
+      if: inputs.trusted_actions_ref != ''
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.trusted_actions_ref }}
+        fetch-depth: 0
+        path: .trusted-review-base
+
     - name: Resolve mention type
       id: resolve
       shell: bash
@@ -70,23 +138,20 @@ runs:
         CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
         CODEX_TOKEN: ${{ inputs.codex_code_oauth_token }}
         CODEX_AUTH: ${{ inputs.codex_auth_json }}
+        TRUSTED_REF: ${{ inputs.trusted_actions_ref }}
       run: |
         HAS_CLAUDE="false"
         HAS_CODEX="false"
         if [ -n "$CLAUDE_TOKEN" ]; then HAS_CLAUDE="true"; fi
         if [ -n "$CODEX_TOKEN" ] || [ -n "$CODEX_AUTH" ]; then HAS_CODEX="true"; fi
-
-        # 空文字列は auto として扱う
         [ -z "$INPUT_MENTION_TYPE" ] && INPUT_MENTION_TYPE="auto"
 
-        # 明示的に指定された場合はそのまま使用
         if [ "$INPUT_MENTION_TYPE" = "claude" ]; then
           if [ "$HAS_CLAUDE" != "true" ]; then
             echo "::error::mention_type=claude が指定されましたが、claude_code_oauth_token がありません"
             exit 1
           fi
           echo "mention_type=claude" >> $GITHUB_OUTPUT
-          echo "mention_type: claude（明示指定）"
           exit 0
         fi
 
@@ -95,18 +160,22 @@ runs:
             echo "::error::mention_type=codex が指定されましたが、codex_code_oauth_token または codex_auth_json がありません"
             exit 1
           fi
+          if [ -z "$TRUSTED_REF" ]; then
+            echo "::error::mention_type=codex には trusted_actions_ref が必須です（.trusted-review-base のチェックアウトに使用）"
+            exit 1
+          fi
           echo "mention_type=codex" >> $GITHUB_OUTPUT
-          echo "mention_type: codex（明示指定）"
           exit 0
         fi
 
-        # auto モード: Claude 優先でフォールバック
         if [ "$HAS_CLAUDE" = "true" ]; then
           echo "mention_type=claude" >> $GITHUB_OUTPUT
-          echo "mention_type: claude（auto）"
         elif [ "$HAS_CODEX" = "true" ]; then
+          if [ -z "$TRUSTED_REF" ]; then
+            echo "::error::Codex の自動選択には trusted_actions_ref が必須です（.trusted-review-base のチェックアウトに使用）"
+            exit 1
+          fi
           echo "mention_type=codex" >> $GITHUB_OUTPUT
-          echo "mention_type: codex（auto - Claude トークンなし、Codex にフォールバック）"
         else
           echo "::error::使用可能なトークンがありません（claude_code_oauth_token または codex_code_oauth_token/codex_auth_json が必要）"
           exit 1
@@ -118,20 +187,19 @@ runs:
       uses: actions/github-script@v7
       env:
         COMMENT_BODY: ${{ inputs.comment_body }}
-        MODEL: ${{ inputs.model }}
-        MAX_TURNS: ${{ inputs.max_turns }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_MAX_TURNS: ${{ inputs.max_turns }}
       with:
         script: |
           const body = process.env.COMMENT_BODY || "";
-
+          const defaultModel = process.env.INPUT_MODEL || "opus";
+          const defaultMaxTurns = process.env.INPUT_MAX_TURNS || "30";
           const model =
             body.includes("[sonnet]") ? "sonnet" :
             body.includes("[opus]")   ? "opus"   :
-            body.includes("[haiku]")  ? "haiku"  : process.env.MODEL || "opus";
-
+            body.includes("[haiku]")  ? "haiku"  : defaultModel;
           const m = body.match(/\[(?:turns|max-turns)=(\d+)\]/);
-          const maxTurns = m ? Number(m[1]) : Number(process.env.MAX_TURNS || "30");
-
+          const maxTurns = m ? Number(m[1]) : Number(defaultMaxTurns);
           core.setOutput("model", model);
           core.setOutput("max_turns", String(maxTurns));
 
@@ -140,7 +208,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        prompt: "${{ inputs.prompt }}"
+        prompt: "${{ steps.review_prompt.outputs.content }}"
         track_progress: true
         allowed_bots: "${{ inputs.allowed_bots }}"
         claude_args: |
@@ -148,19 +216,26 @@ runs:
           --max-turns ${{ steps.opts.outputs.max_turns }}
           --allowedTools "Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr view *),Bash(gh api repos/*/pulls/*/comments*),Bash(gh api repos/*/issues/*/comments*)"
 
+    - name: Publish Claude review comments
+      if: steps.resolve.outputs.mention_type == 'claude' && inputs.pr_number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.codex_github_token != '' && inputs.codex_github_token || inputs.github_token }}
+        REVIEW_CAN_APPROVE: ${{ inputs.codex_github_token != '' && 'true' || 'false' }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/publish_review.sh"
+
     - name: Build Codex review prompt
       if: steps.resolve.outputs.mention_type == 'codex'
       id: codex_prompt
       shell: bash
       env:
-        PROMPT: ${{ inputs.prompt }}
+        PROMPT: ${{ steps.review_prompt.outputs.content }}
       run: |
-        # /review は Claude 固有のコマンドのため、Codex 用のレビュープロンプトに変換
-        if [ "$PROMPT" = "/review" ]; then
-          CODEX_PROMPT="この PR の変更内容をレビューしてください。バグ、セキュリティ問題、パフォーマンスの問題、コードの品質について確認し、改善提案を含むレビューコメントを投稿してください。"
-        else
-          CODEX_PROMPT="$PROMPT"
-        fi
+        CODEX_PROMPT="$PROMPT"
         EOF_MARKER="EOF_REVIEW_$(date +%s%N)"
         echo "content<<${EOF_MARKER}" >> $GITHUB_OUTPUT
         echo "$CODEX_PROMPT" >> $GITHUB_OUTPUT
@@ -168,7 +243,7 @@ runs:
 
     - name: Run Codex
       if: steps.resolve.outputs.mention_type == 'codex'
-      uses: Javakky/claude-starter/.github/actions/run-codex@master
+      uses: ./.trusted-review-base/.github/actions/run-codex
       with:
         codex_code_oauth_token: ${{ inputs.codex_code_oauth_token }}
         codex_auth_json: ${{ inputs.codex_auth_json }}
@@ -176,7 +251,196 @@ runs:
         bot_github_token: ${{ inputs.codex_github_token }}
         prompt: ${{ steps.codex_prompt.outputs.content }}
         comment_body: ${{ inputs.comment_body }}
-        issue_number: ${{ inputs.issue_number }}
+        issue_number: ""
         pr_number: ${{ inputs.pr_number }}
         head_ref: ${{ inputs.head_ref }}
         auto_commit: "false"
+        fail_on_error: "true"
+
+    - name: Publish Codex review comments
+      if: steps.resolve.outputs.mention_type == 'codex' && inputs.pr_number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.codex_github_token != '' && inputs.codex_github_token || inputs.github_token }}
+        REVIEW_CAN_APPROVE: ${{ inputs.codex_github_token != '' && 'true' || 'false' }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/publish_review.sh"
+
+    - name: Resolve obsolete review threads
+      if: inputs.pr_number != '' && inputs.codex_github_token != '' && (steps.resolve.outputs.mention_type == 'claude' || steps.resolve.outputs.mention_type == 'codex')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.codex_github_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REVIEW_RUN_ID: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+        REVIEW_HEAD_SHA: ${{ inputs.head_sha != '' && inputs.head_sha || github.sha }}
+        EXTRA_REVIEW_AUTHORS: ${{ inputs.allowed_review_authors }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f .codex-review-findings.json ]; then
+          echo "skip: no structured findings to compare for thread resolution"
+          exit 0
+        fi
+
+        REPO_OWNER="${GITHUB_REPOSITORY%/*}"
+        REPO_NAME="${GITHUB_REPOSITORY#*/}"
+        REVIEW_AUTHOR_LOGINS="github-actions[bot]"
+        export REPO_OWNER REPO_NAME
+
+        if [ -n "${EXTRA_REVIEW_AUTHORS:-}" ]; then
+          REVIEW_AUTHOR_LOGINS="${REVIEW_AUTHOR_LOGINS},${EXTRA_REVIEW_AUTHORS}"
+        fi
+
+        if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null); then
+          if [ -n "$BOT_LOGIN" ] && [ "$BOT_LOGIN" != "null" ]; then
+            REVIEW_AUTHOR_LOGINS="${REVIEW_AUTHOR_LOGINS},${BOT_LOGIN}"
+          fi
+        fi
+
+        export REVIEW_AUTHOR_LOGINS
+
+        # GraphQL で review threads を取得（ページネーション対応）
+        QUERY='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved comments(first:10){nodes{author{login}path originalLine body}}}pageInfo{hasNextPage endCursor}}}}}'
+
+        echo '[]' > .review-threads-nodes.json
+        CURSOR=""
+        FETCH_OK=true
+        while true; do
+          CURSOR_ARGS=()
+          if [ -n "$CURSOR" ]; then
+            CURSOR_ARGS=(-F "after=$CURSOR")
+          fi
+
+          if ! RESULT=$(gh api graphql \
+            -F "owner=$REPO_OWNER" \
+            -F "name=$REPO_NAME" \
+            -F "number=$PR_NUMBER" \
+            -f "query=$QUERY" \
+            "${CURSOR_ARGS[@]}" 2>/dev/null); then
+            FETCH_OK=false
+            break
+          fi
+
+          # ページのノードを追加
+          echo "$RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes // []' > .review-threads-page.json
+          jq -s '.[0] + .[1]' .review-threads-nodes.json .review-threads-page.json > .review-threads-nodes.tmp.json
+          mv .review-threads-nodes.tmp.json .review-threads-nodes.json
+
+          # ページネーション判定
+          HAS_NEXT=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')
+          if [ "$HAS_NEXT" != "true" ]; then break; fi
+          CURSOR=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""')
+          if [ -z "$CURSOR" ]; then break; fi
+        done
+
+        if [ "$FETCH_OK" != "true" ]; then
+          echo "::warning::reviewThreads の取得に失敗したため stale review thread の自動解決をスキップしました"
+          exit 0
+        fi
+
+        jq '{nodes: .}' .review-threads-nodes.json > .review-threads.json
+
+        # stale thread の照合（jq で marker をデコードし、active findings と比較）
+        if ! jq -r --arg run_id "$REVIEW_RUN_ID" \
+             --arg head_sha "$REVIEW_HEAD_SHA" \
+             --arg authors "$REVIEW_AUTHOR_LOGINS" \
+             --slurpfile findings .codex-review-findings.json \
+        '
+        def normalize: tostring | gsub("\\s+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "");
+
+        def marker_from_body:
+          . // "" |
+          (capture("<!--\\s*codex-review-key:(?<key>[A-Za-z0-9+/=]+)\\s*-->") | .key) // null |
+          if . == null then null
+          else
+            (try (. | @base64d | fromjson) catch null) |
+            if . == null then null
+            else
+              (.path // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $p |
+              (.title // "" | normalize) as $t |
+              (try (.line | tonumber) catch null) as $l |
+              if $p != "" and $t != "" and $l != null and $l > 0 then
+                "\($p)|\($l)|\($t)"
+              else null end
+            end
+          end;
+
+        # Freshness 検証
+        $findings[0] as $f |
+        ($f.generated_by_run_id // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $gen_run |
+        ($f.generated_for_head_sha // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $gen_sha |
+        (if $gen_run != $run_id then error("run mismatch during stale thread resolution") else . end) |
+        (if $gen_sha != $head_sha then error("head SHA mismatch during stale thread resolution") else . end) |
+
+        # Active findings set
+        ([$f.findings // [] | .[] | select(type == "object") |
+          select((.severity // "" | ascii_downcase) != "low") |
+          (.path // "" | tostring | sub("^\\s+"; "") | sub("\\s+$"; "")) as $p |
+          (.title // "" | normalize) as $t |
+          (try (.line | tonumber) catch null) as $l |
+          select($p != "" and $t != "" and $l != null and $l > 0) |
+          "\($p)|\($l)|\($t)"
+        ] | map({(.): true}) | add // {}) as $active_set |
+
+        # Allowed authors set
+        ($authors | split(",") | map(normalize) | map(select(. != "")) | map({(.): true}) | add // {}) as $allowed |
+
+        # stale thread ID を出力
+        [.nodes[] | select(.isResolved | not) |
+          (.comments.nodes // []) as $comments |
+          select(($comments | length) > 0) |
+          $comments[0] as $first |
+          ($first.author.login // "" | normalize) as $author |
+          select($allowed[$author]) |
+          ($first.body | marker_from_body) as $marker |
+          select($marker != null) |
+          select($active_set[$marker] | not) |
+          .id
+        ] | .[]
+        ' .review-threads.json > .review-thread-ids.txt; then
+          echo "::warning::stale review thread の照合に失敗したため自動解決をスキップしました"
+          exit 0
+        fi
+
+        while IFS= read -r thread_id; do
+          [ -z "$thread_id" ] && continue
+          if ! gh api graphql \
+            -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}) { thread { id isResolved } } }' \
+            -F id="$thread_id" >/dev/null 2>.review-thread-resolve.err; then
+            ERR_MSG=$(tr '\n' ' ' < .review-thread-resolve.err | sed 's/[[:space:]]\+/ /g')
+            echo "::warning::resolveReviewThread failed for $thread_id: $ERR_MSG"
+          fi
+        done < .review-thread-ids.txt
+
+    - name: Skip obsolete review thread resolution without bot token
+      if: inputs.pr_number != '' && inputs.codex_github_token == '' && (steps.resolve.outputs.mention_type == 'claude' || steps.resolve.outputs.mention_type == 'codex')
+      shell: bash
+      run: |
+        echo "::warning::codex_github_token が未設定のため stale review thread の自動解決をスキップしました"
+
+    - name: Cleanup temp files
+      if: always()
+      shell: bash
+      run: |
+        rm -f \
+          .review-pr-files.jsonl \
+          .review-payload.json \
+          .review-comments.json \
+          .review-comments.ndjson \
+          .review-fallback.md \
+          .review-fallback-all.md \
+          .review-post.err \
+          .review-comment.err \
+          .review-meta.env \
+          .review-processed.json \
+          .review-valid-lines.json \
+          .review-changed-files.json \
+          .review-threads.json \
+          .review-threads-nodes.json \
+          .review-threads-page.json \
+          .review-thread-ids.txt \
+          .review-thread-resolve.err
