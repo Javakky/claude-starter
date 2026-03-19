@@ -12,3 +12,4 @@
 - 既存 migration の書き換え
 - GitHub Actions の権限を強める変更（permissions の緩和など）
 - 依存関係のメジャーアップデート
+- `infra/` ディレクトリ（Terraform によるインフラ管理）

@@ -1,0 +1,113 @@
+# =============================================================================
+# Cloudflare Pages プロジェクト - Terraform 設定
+#
+# このファイルでは以下を定義しています:
+#   1. Terraform の基本設定（バージョン制約・プロバイダー・バックエンド）
+#   2. Cloudflare プロバイダーの認証設定
+#   3. Cloudflare Pages プロジェクトリソース
+#
+# 初めて使う場合:
+#   1. terraform init   - プロバイダーのダウンロードと backend の初期化
+#   2. terraform plan   - 変更内容のプレビュー（実際の変更は行わない）
+#   3. terraform apply  - 変更の適用（確認プロンプトあり）
+#
+# 詳しくは docs/infra/terraform-guide.md を参照してください。
+# =============================================================================
+
+terraform {
+  # Terraform 1.0 以上が必要
+  required_version = ">= 1.0"
+
+  # 使用するプロバイダー（Terraform プラグイン）の定義
+  # source: プロバイダーのレジストリパス
+  # version: 互換性のあるバージョン範囲（~> 4.0 = 4.x の最新）
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 4.0"
+    }
+  }
+
+{% if terraform_backend == "cloud" %}
+  # Terraform Cloud backend
+  # state（インフラの現在の状態）を Terraform Cloud に保存します。
+  # 複数人での作業時に state のロック・共有が自動で行われます。
+  #
+  # 事前準備:
+  #   1. https://app.terraform.io/ でアカウント・organization・workspace を作成
+  #   2. CI で使う場合は secrets に TF_API_TOKEN を登録
+  cloud {
+    organization = "{{ terraform_cloud_organization }}"
+    workspaces {
+      name = "{{ terraform_cloud_workspace }}"
+    }
+  }
+{% elif terraform_backend == "s3" %}
+  # S3 互換ストレージ backend（Cloudflare R2 等）
+  # state を S3 互換のオブジェクトストレージに保存します。
+  #
+  # 事前準備:
+  #   1. R2 バケットを作成（例: terraform-state）
+  #   2. R2 API トークンを作成
+  #   3. endpoint を自分のアカウント ID に変更
+  #   4. CI では secrets に AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY を登録
+  #      または terraform init -backend-config="access_key=xxx" で渡す
+  backend "s3" {
+    bucket = "terraform-state"
+    key    = "terraform.tfstate"
+    region = "auto"
+
+    # Cloudflare R2 を使う場合は endpoint を設定してください:
+    # endpoint = "https://<account_id>.r2.cloudflarestorage.com"
+
+    # R2 は AWS S3 完全互換ではないため、以下の検証スキップが必要です
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_s3_checksum            = true
+  }
+{% else %}
+  # ⚠️ backend 未設定: state はローカルにのみ保存されます
+  # CI 環境ではジョブ終了後に state が失われるため、本番運用には不向きです。
+  # copier.yml の terraform_backend を "cloud" または "s3" に変更してください。
+  #
+  # この設定では infra-plan / infra-apply ワークフローは生成されません。
+  # ローカルでのみ terraform plan / apply を実行してください。
+{% endif %}
+}
+
+# Cloudflare プロバイダーの認証設定
+# api_token は変数経由で渡します（直接ハードコードしないでください）。
+#   ローカル: export TF_VAR_cloudflare_api_token="your-token"
+#   CI:       secrets.CLOUDFLARE_API_TOKEN → TF_VAR_cloudflare_api_token
+provider "cloudflare" {
+  api_token = var.cloudflare_api_token
+}
+
+# -----------------------------------------------------------------------------
+# Cloudflare Pages プロジェクト
+#
+# このリソースは Cloudflare Pages プロジェクトを作成します。
+# production_branch に指定したブランチへのプッシュで本番デプロイが行われます。
+#
+# よくあるカスタマイズ例:
+#
+#   # カスタムドメインを追加する場合:
+#   resource "cloudflare_pages_domain" "custom" {
+#     account_id   = var.cloudflare_account_id
+#     project_name = cloudflare_pages_project.this.name
+#     domain       = "example.com"
+#   }
+#
+#   # ビルド設定を追加する場合（build_config ブロックを追加）:
+#   build_config {
+#     build_command   = "npm run build"
+#     destination_dir = "dist"
+#   }
+# -----------------------------------------------------------------------------
+resource "cloudflare_pages_project" "this" {
+  account_id        = var.cloudflare_account_id
+  name              = var.project_name
+  production_branch = var.production_branch
+}

@@ -12,12 +12,14 @@ _exclude:
   - "{% if not install_docs %}docs{% endif %}"
   - "{% if not install_scripts %}scripts{% endif %}"
   - "{% if not install_staging %}infra{% endif %}"
-  - "{% if not install_staging %}.github/workflows/infra-*.yml{% endif %}"
+  - "{% if not install_staging or terraform_backend == 'none' %}.github/actions/setup-terraform{% endif %}"
+  - "{% if not install_staging or terraform_backend == 'none' %}.github/workflows/infra-*.yml{% endif %}"
   - "{% if not install_staging %}.github/workflows/deploy-*.yml{% endif %}"
   - "{% if not install_staging %}.github/workflows/cleanup-*.yml{% endif %}"
   - "{% if not install_staging %}functions{% endif %}"
   - "{% if not install_staging %}scripts/init-webapp.sh{% endif %}"
   - "{% if not install_staging %}docs/staging{% endif %}"
+  - "{% if not install_staging %}docs/infra{% endif %}"
   - "copier.yml"
   - "README.md"
   - "**/*.local.json"
@@ -86,6 +88,41 @@ cloudflare_account_id:
     Cloudflare のアカウント ID を入力してください。
   when: "{{ install_staging }}"
   validator: "{% if not cloudflare_account_id %}アカウント ID は必須です{% endif %}"
+
+production_branch:
+  type: str
+  help: |
+    本番環境のブランチ名を入力してください。
+  default: "main"
+  when: "{{ install_staging }}"
+
+terraform_backend:
+  type: str
+  help: |
+    Terraform の backend タイプを選択してください。
+    cloud: Terraform Cloud（推奨）
+    s3: S3 互換ストレージ（Cloudflare R2 等）
+    none: backend 未設定（ローカルのみ・非推奨）
+  default: "cloud"
+  choices:
+    - "cloud"
+    - "s3"
+    - "none"
+  when: "{{ install_staging }}"
+
+terraform_cloud_organization:
+  type: str
+  help: |
+    Terraform Cloud の organization 名を入力してください。
+  when: "{{ install_staging and terraform_backend == 'cloud' }}"
+  validator: "{% if not terraform_cloud_organization %}organization 名は必須です{% endif %}"
+
+terraform_cloud_workspace:
+  type: str
+  help: |
+    Terraform Cloud の workspace 名を入力してください。
+  when: "{{ install_staging and terraform_backend == 'cloud' }}"
+  validator: "{% if not terraform_cloud_workspace %}workspace 名は必須です{% endif %}"
 
 # =============================================================================
 # Claude モデル・ターン数設定
